@@ -1854,6 +1854,7 @@ function completeQuest(quest, mode, timeBonus) {
   checkAchievements();
 
   renderQuests();
+  renderStatus();
 }
 
 function completeWeeklyQuest(wq) {
@@ -1879,6 +1880,7 @@ function completeWeeklyQuest(wq) {
   addBuff(keys[Math.floor(Math.random() * keys.length)]);
   checkAchievements();
   renderQuests();
+  renderStatus();
 }
 
 // ========================
