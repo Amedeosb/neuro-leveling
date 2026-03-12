@@ -1063,8 +1063,86 @@ function getAvailableQuests(assessment) {
 }
 
 // ========================
-// COMPANION AI  (local deterministic)
+// COMPANION AI  (context-aware deterministic)
 // ========================
+
+function _pick(arr) { return arr[Math.floor(Math.random()*arr.length)]; }
+
+function _timeOfDay() {
+  const h = new Date().getHours();
+  if (h < 6 )  return 'night';
+  if (h < 12)  return 'morning';
+  if (h < 17)  return 'afternoon';
+  if (h < 21)  return 'evening';
+  return 'night';
+}
+
+function _todayQuestNames() {
+  return (state.todayCompleted||[])
+    .map(id => QUEST_DEFINITIONS.find(q=>q.id===id))
+    .filter(Boolean).map(q=>q.name);
+}
+
+function _weakestStats(n) {
+  return [...PRIMARY_STATS,...SECONDARY_STATS]
+    .sort((a,b)=>getStatLv(a.id)-getStatLv(b.id)).slice(0,n);
+}
+
+function _strongestStats(n) {
+  return [...PRIMARY_STATS,...SECONDARY_STATS]
+    .sort((a,b)=>getStatLv(b.id)-getStatLv(a.id)).slice(0,n);
+}
+
+function _nearAchievements() {
+  return ACHIEVEMENT_DEFINITIONS.filter(a => {
+    if ((state.achievements||[]).includes(a.id)) return false;
+    // heuristic proximity checks
+    if (a.id==='first_blood'  && state.questsCompleted>=1)  return false;
+    if (a.id==='dedicated'    && state.questsCompleted>=8)  return true;
+    if (a.id==='centurion'    && state.questsCompleted>=85) return true;
+    if (a.id==='legend'       && state.questsCompleted>=450)return true;
+    if (a.id==='streak_7'     && state.currentStreak>=5)    return true;
+    if (a.id==='streak_30'    && state.currentStreak>=25)   return true;
+    if (a.id==='streak_100'   && state.currentStreak>=90)   return true;
+    if (a.id==='boss_slayer'  && state.bossesDefeated.length===0) return true;
+    if (a.id==='combo_first'  && (state.totalCombos||0)===0)   return true;
+    if (a.id==='combo_king'   && (state.totalCombos||0)>=20)   return true;
+    if (a.id==='crit_10'      && (state.criticalHits||0)>=7)   return true;
+    if (a.id==='xp_10k'       && state.totalXP>=7500)       return true;
+    if (a.id==='xp_100k'      && state.totalXP>=85000)      return true;
+    if (a.id==='lv_30'        && getTotalLevel()>=25)        return true;
+    if (a.id==='lv_60'        && getTotalLevel()>=52)        return true;
+    if (a.id==='class_10'     && getClassLevel()>=8)         return true;
+    return false;
+  });
+}
+
+function _suggestQuestsForWeakStat(weakStat) {
+  return QUEST_DEFINITIONS.filter(q =>
+    q.rewards.some(r=>r.stat===weakStat.id) && meetsReq(q.req)
+  ).sort((a,b)=>{
+    const xa=a.rewards.find(r=>r.stat===weakStat.id)?.xp||0;
+    const xb=b.rewards.find(r=>r.stat===weakStat.id)?.xp||0;
+    return xb-xa;
+  }).slice(0,3);
+}
+
+function _pendingCombos() {
+  const done = state.todayCompleted||[];
+  return COMBO_DEFINITIONS.filter(c => !c.check(done)).map(c => {
+    const needed = [];
+    if (c.id==='mind_body') {
+      const cats = done.map(id=>QUEST_DEFINITIONS.find(q=>q.id===id)?.cat).filter(Boolean);
+      if (!cats.includes('PHYSIQUE'))  needed.push('PHYSIQUE');
+      if (!cats.includes('COGNITIVE')) needed.push('COGNITIVE');
+    }
+    if (c.id==='full_spectrum') {
+      const cats = new Set(done.map(id=>QUEST_DEFINITIONS.find(q=>q.id===id)?.cat).filter(Boolean));
+      for (const cat of ['PHYSIQUE','COGNITIVE','NEURAL','SOCIAL']) if (!cats.has(cat)) needed.push(cat);
+    }
+    return { ...c, needed };
+  });
+}
 
 function companionReply(msg) {
   const m = msg.toLowerCase().trim();
@@ -1073,89 +1151,401 @@ function companionReply(msg) {
   const clsName = cls?.name ?? 'Hunter';
   const streak = state.currentStreak;
   const lastA = state.assessmentHistory[state.assessmentHistory.length-1];
-  const debuffs = state.activeDebuffs;
+  const debuffs = state.activeDebuffs||[];
+  const tod = _timeOfDay();
+  const todayDone = _todayQuestNames();
+  const todayCount = todayDone.length;
+  const title = getTitle();
+  const classLv = getClassLevel();
 
-  // Greetings
-  if (/^(ciao|hey|salve|buon)/.test(m))
-    return `Salve, ${clsName}. Livello totale ${lv}, streak di ${streak} giorni. Come posso aiutarti?`;
+  // ── HELP ──
+  if (/^(help|aiuto|\?|comand|cosa (sai|puoi))/.test(m))
+    return 'Posso aiutarti con: STAT, QUEST, BOSS, COMBO, CATENE, ACHIEVEMENT, CLASSE, STREAK, SONNO, RESPIRAZIONE, HRV, STRESS, MOTIVAZIONE, BIOHACKING, NUTRIZIONE, OGGI, REPORT, DEBUFF. Scrivi un argomento!';
 
-  // Stats / Status
+  // ── GREETINGS (time-aware) ──
+  if (/^(ciao|hey|salve|buon|ehi|yo|oi)/.test(m)) {
+    const greetByTime = {
+      morning: [
+        `Buongiorno, ${clsName}. Il cortisolo endogeno è al picco — momento ideale per le quest più intense.`,
+        `Buongiorno, ${title}. Livello ${lv}, streak ${streak}. Pronto per una giornata di leveling?`,
+        `Rilevato: ${clsName} LV.${lv} online. Esposizione solare mattutina completata? Attiva la melanopsina per sincronizzare i ritmi circadiani.`,
+      ],
+      afternoon: [
+        `Buon pomeriggio, ${clsName}. ${todayCount > 0 ? `Oggi hai completato ${todayCount} quest. Continua così.` : 'Nessuna quest completata oggi. Il momento è adesso.'}`,
+        `${title}, il pomeriggio è ottimale per quest sociali e creative. Il picco di temperatura corporea migliora le performance fisiche.`,
+      ],
+      evening: [
+        `Buonasera, ${clsName}. ${todayCount > 0 ? `${todayCount} quest oggi — buon lavoro.` : 'C\'è ancora tempo per almeno una quest.'} La sera è ideale per protocolli di recovery.`,
+        `Buonasera, ${title}. Preparati al wind-down: riduci l'esposizione alla luce blu e abbassa la temperatura ambiente.`,
+      ],
+      night: [
+        `${clsName}, è tardi. Il sonno è il protocollo di recupero più potente. Ogni ora prima di mezzanotte vale doppio per la rigenerazione.`,
+        `Rilevato: sessione notturna. Se non riesci a dormire, prova il protocollo 4-7-8 (inspira 4s, trattieni 7s, espira 8s).`,
+      ],
+    };
+    return _pick(greetByTime[tod]);
+  }
+
+  // ── TODAY / PROGRESS ──
+  if (/oggi|giornata|fatto oggi|progresso di oggi|sessione/.test(m)) {
+    if (todayCount === 0)
+      return `Nessuna quest completata oggi. ${debuffs.length > 0 ? `Hai ${debuffs.length} debuff attivi — inizia con una quest di recovery.` : 'Inizia con una quest facile per attivare il circuito dopaminergico.'}`;
+    const combosDone = COMBO_DEFINITIONS.filter(c => c.check(state.todayCompleted||[]));
+    let r = `Oggi hai completato ${todayCount} quest: ${todayDone.join(', ')}.`;
+    if (combosDone.length > 0) r += ` Combo attivate: ${combosDone.map(c=>c.name).join(', ')}!`;
+    const pending = _pendingCombos().filter(c => c.needed.length <= 2);
+    if (pending.length > 0) r += ` Puoi ancora attivare: ${pending.map(c=>`${c.name} (mancano: ${c.needed.join(', ')})`).join('; ')}.`;
+    return r;
+  }
+
+  // ── REPORT (weekly/overall) ──
+  if (/report|riepilog|riassunt|stato general|panoramic/.test(m)) {
+    const weak = _weakestStats(2);
+    const strong = _strongestStats(2);
+    const nearAch = _nearAchievements();
+    let r = `📊 REPORT — ${title} LV.${lv} | Classe: ${clsName} LV.${classLv} | Streak: ${streak}gg\n`;
+    r += `▸ Stat forti: ${strong.map(s=>`${s.icon}${s.name} LV.${getStatLv(s.id)}`).join(', ')}\n`;
+    r += `▸ Stat deboli: ${weak.map(s=>`${s.icon}${s.name} LV.${getStatLv(s.id)}`).join(', ')}\n`;
+    r += `▸ Quest totali: ${state.questsCompleted} | Boss sconfitti: ${state.bossesDefeated.length}/${BOSS_DEFINITIONS.length}\n`;
+    if (debuffs.length > 0) r += `⚠ Debuff attivi: ${debuffs.map(d=>d.name).join(', ')}\n`;
+    if (nearAch.length > 0) r += `🏆 Achievement vicini: ${nearAch.slice(0,3).map(a=>`${a.icon} ${a.name}`).join(', ')}`;
+    return r;
+  }
+
+  // ── STATS ──
   if (/stat|livell|level|punti|profilo|come sto/.test(m)) {
-    const top3 = [...PRIMARY_STATS].sort((a,b)=>getStatLv(b.id)-getStatLv(a.id)).slice(0,3);
-    const weak = [...PRIMARY_STATS].sort((a,b)=>getStatLv(a.id)-getStatLv(b.id))[0];
-    return `Le tue stat migliori: ${top3.map(s=>`${s.name} LV.${getStatLv(s.id)}`).join(', ')}. ` +
-      `Punto debole: ${weak.name} LV.${getStatLv(weak.id)}. Ti consiglio di lavorarci con quest mirate.`;
+    const top3 = _strongestStats(3);
+    const weak = _weakestStats(1)[0];
+    const questsForWeak = _suggestQuestsForWeakStat(weak);
+    let r = `Le tue stat migliori: ${top3.map(s=>`${s.icon}${s.name} LV.${getStatLv(s.id)}`).join(', ')}. ` +
+      `Punto debole: ${weak.icon}${weak.name} LV.${getStatLv(weak.id)}.`;
+    if (questsForWeak.length > 0)
+      r += ` Quest consigliate per migliorarla: ${questsForWeak.map(q=>`${q.name} (+${q.rewards.find(r=>r.stat===weak.id)?.xp||0} XP)`).join(', ')}.`;
+    return r;
   }
 
-  // Quest advice
+  // ── QUEST ADVICE (context-aware) ──
   if (/quest|cosa (devo|posso) fare|missione|attività|consig/.test(m)) {
-    if (debuffs.length > 0)
-      return `Hai ${debuffs.length} debuff attivi (${debuffs.map(d=>d.name).join(', ')}). Priorità: quest di recovery come Vagal Reset e Box Breathing.`;
-    if (lastA?.ansState==='SYMPATHETIC')
-      return 'Il tuo SNA è in modalità simpatica. Concentrati su Vagal Reset e Box Breathing prima di qualsiasi altra quest.';
-    return 'Tutte le quest sono autorizzate. Attacca le quest ad alta difficoltà nelle prime 4 ore della giornata per sfruttare il picco di cortisolo endogeno.';
-  }
-
-  // Boss advice
-  if (/boss|sfida|combat|nemico/.test(m)) {
-    const available = BOSS_DEFINITIONS.filter(b => !state.bossesDefeated.includes(b.id) && meetsReq(b.req));
-    if (available.length === 0) {
-      const locked = BOSS_DEFINITIONS.filter(b => !state.bossesDefeated.includes(b.id) && !meetsReq(b.req));
-      if (locked.length > 0) {
-        const next = locked[0];
-        const missing = next.req.filter(r=>getStatLv(r.stat)<r.minLv).map(r=>`${r.stat} LV.${r.minLv}`);
-        return `Nessun boss disponibile. Per sbloccare ${next.name}, ti servono: ${missing.join(', ')}. Fai quest mirate.`;
-      }
-      return 'Hai sconfitto tutti i boss! Sei un vero Shadow Monarch. Continua a fare quest per consolidare le tue stat.';
+    // Debuff priority
+    if (debuffs.length > 0) {
+      const recoveryQuests = QUEST_DEFINITIONS.filter(q=>q.type==='RECOVERY').map(q=>q.name);
+      return `⚠ ${debuffs.length} debuff attivi: ${debuffs.map(d=>`${d.icon} ${d.name}`).join(', ')}. Priorità assoluta: ${recoveryQuests.join(', ')}. Elimina i debuff prima di quest ad alta intensità.`;
     }
-    return `Boss disponibili: ${available.map(b=>`${b.icon} ${b.name} (LV.${b.level})`).join(', ')}. Preparati con i protocolli giusti.`;
+    // ANS state
+    if (lastA?.ansState==='SYMPATHETIC')
+      return '⚠ SNA in modalità SIMPATICA — corteccia prefrontale compromessa. Priorità: Vagal Reset → Box Breathing → Mindfulness. Solo dopo potrai affrontare quest impegnative.';
+    // Smart suggestion based on weakest stat, class, time of day, and today's activity
+    const weak = _weakestStats(1)[0];
+    const questsForWeak = _suggestQuestsForWeakStat(weak).filter(q => !(state.todayCompleted||[]).includes(q.id));
+    const classPrimary = cls?.primary || [];
+    const classQuests = QUEST_DEFINITIONS.filter(q =>
+      meetsReq(q.req) && q.rewards.some(r => classPrimary.includes(r.stat)) &&
+      !(state.todayCompleted||[]).includes(q.id)
+    ).slice(0,2);
+
+    let r = '';
+    if (tod === 'morning')
+      r += 'Mattina = picco di cortisolo. Ideale per quest ad alta difficoltà (diff 6+). ';
+    else if (tod === 'evening')
+      r += 'Sera = fase parasimpatica. Ideale per recovery, meditazione e quest cognitive leggere. ';
+    if (todayCount === 0)
+      r += 'Non hai ancora completato nessuna quest oggi. ';
+    else if (todayCount >= 5)
+      r += `Ottimo, oggi hai già ${todayCount} quest — attento al sovrallenamento. `;
+
+    if (questsForWeak.length > 0)
+      r += `Per la tua stat più debole (${weak.icon}${weak.name}): ${questsForWeak.map(q=>q.name).join(', ')}. `;
+    if (classQuests.length > 0)
+      r += `Per la classe ${clsName}: ${classQuests.map(q=>q.name).join(', ')}.`;
+    return r || 'Tutte le quest sono autorizzate. Attacca le quest ad alta difficoltà per massimizzare la progressione.';
   }
 
-  // Sleep
-  if (/sonn|sleep|dormi|riposo|stanco/.test(m))
-    return 'Il sonno è il protocollo di recupero #1. Target: 7-9 ore, temperatura stanza 18-19°C, no schermi 1h prima. La qualità del sonno influenza direttamente HRV, BOLT e tutte le stat.';
+  // ── COMBOS ──
+  if (/combo|combinazion|sinergi/.test(m)) {
+    const done = state.todayCompleted||[];
+    const active = COMBO_DEFINITIONS.filter(c => c.check(done));
+    const pending = _pendingCombos().filter(c => c.needed.length <= 2);
+    let r = '';
+    if (active.length > 0)
+      r += `Combo attive oggi: ${active.map(c=>`${c.icon} ${c.name} (+${c.bonusXP} XP ${c.bonusStat})`).join(', ')}. `;
+    if (pending.length > 0)
+      r += `Combo sbloccabili: ${pending.map(c=>`${c.icon} ${c.name} — mancano: ${c.needed.join(', ')}`).join('; ')}. `;
+    if (!r)
+      r = `Hai ${(state.totalCombos||0)} combo totali. Le combo si attivano completando quest di categorie diverse nello stesso giorno. Punta a FULL SPECTRUM (1 per categoria) per il bonus massimo.`;
+    return r;
+  }
 
-  // Breathing
-  if (/respir|breath|bolt|co2|apnea/.test(m))
-    return `Il tuo BOLT score attuale è ${lastA?.bolt ?? '?'}s. Target: >25s per funzionalità base, >40s per performance. Pratica respirazione nasale ridotta e Box Breathing quotidianamente.`;
+  // ── CHAINS ──
+  if (/caten|chain|percorso di quest/.test(m)) {
+    const inProgress = CHAIN_DEFINITIONS.filter(c => {
+      const p = getChainProgress(c.id);
+      return !p.completed && p.step > 0;
+    });
+    const available = CHAIN_DEFINITIONS.filter(c => {
+      const p = getChainProgress(c.id);
+      return !p.completed && p.step === 0;
+    });
+    const completed = CHAIN_DEFINITIONS.filter(c => getChainProgress(c.id).completed);
+    let r = '';
+    if (inProgress.length > 0)
+      r += `⛓ Catene in corso: ${inProgress.map(c => {const p=getChainProgress(c.id); return `${c.icon} ${c.name} (${p.step}/${c.steps.length} — prossimo: ${c.steps[p.step]?.name})`;}).join('; ')}. `;
+    if (available.length > 0)
+      r += `Catene disponibili: ${available.map(c=>`${c.icon} ${c.name}`).join(', ')}. `;
+    if (completed.length > 0)
+      r += `✓ Completate: ${completed.map(c=>`${c.icon} ${c.name}`).join(', ')}.`;
+    if (!r)
+      r = 'Le catene sono sequenze di quest tematiche che danno grandi ricompense. Vai nella sezione Catene per iniziarne una.';
+    return r;
+  }
 
-  // HRV
-  if (/hrv|variabilità|cuore|cardiac/.test(m))
-    return `HRV attuale: ${lastA?.hrv ?? '?'}ms. Un HRV alto indica alta capacità adattiva del SNA. Per migliorarla: sonno, respirazione, cold exposure, e riduzione dello stress cronico.`;
+  // ── ACHIEVEMENTS ──
+  if (/achiev|traguard|obiettiv|trofeo|medagli/.test(m)) {
+    const earned = (state.achievements||[]).length;
+    const total = ACHIEVEMENT_DEFINITIONS.length;
+    const near = _nearAchievements();
+    let r = `🏆 Achievement: ${earned}/${total} sbloccati. `;
+    if (near.length > 0) {
+      r += `Quasi raggiunti: ${near.slice(0,3).map(a=>`${a.icon} ${a.name} — ${a.desc}`).join('; ')}. `;
+      r += 'Concentrati su questi per il prossimo sblocco!';
+    } else if (earned === total) {
+      r += 'Li hai sbloccati tutti! Sei una leggenda.';
+    } else {
+      r += 'Continua a completare quest, combattere boss e mantenere la streak per sbloccarne di nuovi.';
+    }
+    return r;
+  }
 
-  // Stress / Anxiety
-  if (/stress|ansia|ansioso|panico|paura/.test(m))
-    return 'Quando il sistema è in overdrive simpatico, la corteccia prefrontale va offline. Protocollo: 1) Physiological Sigh (doppia inspirazione + lunga espirazione), 2) Grounding 5-4-3-2-1, 3) Cold exposure del viso. Questo forza il freno vagale.';
+  // ── BOSS ADVICE (detailed gap analysis) ──
+  if (/boss|sfida|combat|nemico/.test(m)) {
+    const defeated = state.bossesDefeated||[];
+    const available = BOSS_DEFINITIONS.filter(b => !defeated.includes(b.id) && meetsReq(b.req));
+    const locked = BOSS_DEFINITIONS.filter(b => !defeated.includes(b.id) && !meetsReq(b.req));
 
-  // Motivation
-  if (/motiv|pigr|non ho voglia|demotiv|arrender/.test(m))
-    return 'La motivazione non è un prerequisito, è un risultato dell\'azione. Regola dei 2 minuti: inizia con la quest più piccola. Il cervello rilascia dopamina al COMPLETAMENTO, non all\'inizio. Ogni quest completata rinforza il circuito.';
+    if (available.length === 0 && locked.length === 0)
+      return `Hai sconfitto tutti i boss! ${defeated.length}/${BOSS_DEFINITIONS.length}. Sei un vero Shadow Monarch. Le tue stat sono al massimo della potenza.`;
 
-  // Class
-  if (/class|percorso|specializzazione|ruolo/.test(m))
-    return `La tua classe è ${clsName} (LV.${getClassLevel()}). Ogni punto nelle stat primarie della classe accelera la progressione. Continua a fare quest allineate al tuo percorso.`;
+    let r = '';
+    if (available.length > 0) {
+      r += `⚔ Boss disponibili: ${available.map(b=>`${b.icon} ${b.name} (LV.${b.level})`).join(', ')}. `;
+      const easiest = available.sort((a,b)=>a.level-b.level)[0];
+      r += `Consiglio: inizia con ${easiest.icon} ${easiest.name}. `;
+    }
+    if (locked.length > 0) {
+      const next = locked.sort((a,b)=>a.level-b.level)[0];
+      const missing = next.req.filter(r=>getStatLv(r.stat)<r.minLv);
+      const gaps = missing.map(r => {
+        const def = [...PRIMARY_STATS,...SECONDARY_STATS].find(s=>s.id===r.stat);
+        return `${def?.icon||''}${r.stat} ${getStatLv(r.stat)}→${r.minLv} (mancano ${r.minLv-getStatLv(r.stat)} LV)`;
+      });
+      r += `🔒 Prossimo boss: ${next.icon} ${next.name} — requisiti mancanti: ${gaps.join(', ')}.`;
+    }
+    return r;
+  }
 
-  // Streak
-  if (/streak|cosecutiv|giorni/.test(m))
-    return `Streak attuale: ${streak} giorni. Ogni giorno di streak aggiunge +5% XP bonus (max +50%). Non interrompere la catena!`;
+  // ── DEBUFF ──
+  if (/debuff|maledizion|penalità|nerf|status negativ/.test(m)) {
+    if (debuffs.length === 0)
+      return '✓ Nessun debuff attivo. Il tuo sistema è in equilibrio. Mantienilo con sonno adeguato, respirazione e gestione dello stress.';
+    const protocols = {
+      anxiety: 'Physiological Sigh + Grounding 5-4-3-2-1 + Cold exposure viso',
+      lethargy: 'Cold shower 60s + 20 jumping jacks + esposizione solare 10min',
+      sympathetic: 'Vagal Reset + Box Breathing 4-4-4-4 + respirazione 4-8',
+      sleep: 'No caffeina dopo le 14:00 + temp stanza 18°C + 0 schermi 1h prima',
+      respiratory: 'Respirazione nasale tutto il giorno + Box Breathing + BOLT test quotidiano',
+    };
+    return debuffs.map(d => {
+      const proto = protocols[d.id] || 'Quest di recovery';
+      return `${d.icon} ${d.name} (${d.cats.join(',')} -${Math.round((1-d.mult)*100)}%) → Protocollo: ${proto}`;
+    }).join('\n');
+  }
 
-  // Biohacking
-  if (/biohack|hack|ottimizz|supplement|nootropi/.test(m))
-    return 'I fondamentali prima dei supplementi: 1) Sonno ottimale, 2) Respirazione nasale, 3) Cold exposure, 4) Allenamento, 5) Esposizione solare mattutina. Questi modificano neurochimicamente il sistema più di qualsiasi nootropo.';
+  // ── SLEEP ──
+  if (/sonn|sleep|dormi|riposo|stanco|stanch/.test(m)) {
+    const sleepTips = [
+      `Il sonno è il protocollo #1. Target: 7-9h. ${lastA?.sleep ? `Ultimo score sonno: ${lastA.sleep}/10` : ''}. Temperatura stanza 18-19°C, no schermi 1h prima, no caffeina dopo le 14:00. La qualità influenza HRV, BOLT e ogni stat.`,
+      `Protocollo sonno ottimale: 1) Esposizione solare mattutina 10min, 2) Ultima caffeina entro 8h prima del sonno, 3) Doccia calda 90min prima (abbassa temp core), 4) Camera buia, fredda, silenziosa, 5) Routine costante ±30min.`,
+      `${tod==='night' ? 'È tardi — dovresti essere a letto. ' : ''}Il sonno profondo (SWS) è il momento in cui il cervello consolida gli apprendimenti e ripulisce le tossine tramite il sistema glinfatico. Meno di 7h = stat debuffate.`,
+    ];
+    return _pick(sleepTips);
+  }
 
-  // Nutrition
-  if (/cibo|mangi|nutri|diet|aliment/.test(m))
-    return 'Nutrizione per performance: proteine sufficienti (1.6-2g/kg), grassi omega-3, verdure crucifere, minimizzare zuccheri raffinati. Il timing conta: pasto proteico post-allenamento, carboidrati la sera per favorire il sonno.';
+  // ── BREATHING ──
+  if (/respir|breath|bolt|co2|apnea|nasale/.test(m)) {
+    const bolt = lastA?.bolt;
+    const co2Lv = getStatLv('CO2');
+    let r = '';
+    if (bolt != null) {
+      r += `BOLT attuale: ${bolt}s. `;
+      if (bolt < 15) r += 'CRITICO — la tolleranza CO2 è molto bassa. Respira solo dal naso per 24h e fai Box Breathing 3x al giorno. ';
+      else if (bolt < 25) r += 'Insufficiente — pratica respirazione nasale ridotta (respira meno) per 10min, 2x al giorno. ';
+      else if (bolt < 40) r += 'Buono — continua con Box Breathing e aggiungi trattenute post-espirazione. ';
+      else r += 'Eccellente — sei a livello avanzato. Sperimenta con Wim Hof o Tummo. ';
+    }
+    r += `Tono CO2: LV.${co2Lv}. Obiettivo: respirazione nasale 24/7, anche durante l'esercizio.`;
+    return r;
+  }
 
-  // Default
-  const tips = [
-    `Ricorda, ${clsName}: la costanza batte l'intensità. ${streak} giorni di streak è un buon inizio.`,
-    `Il tuo livello totale è ${lv}. Ogni quest completata ti avvicina al prossimo titolo.`,
-    'Chiedimi di stat, quest, boss, sonno, respirazione, stress, motivazione o biohacking.',
-    `Hai ${state.questsCompleted} quest completate e ${state.bossesDefeated.length} boss sconfitti. Continua così.`,
-    'La neuroplasticità è dalla tua parte. Ogni protocollo eseguito crea nuovi circuiti neurali.',
+  // ── HRV ──
+  if (/hrv|variabilità|cuore|cardiac/.test(m)) {
+    const history = state.assessmentHistory.slice(-7);
+    const hrv = lastA?.hrv;
+    let r = '';
+    if (hrv != null) {
+      r += `HRV attuale: ${hrv}ms. `;
+      if (history.length >= 3) {
+        const avg = Math.round(history.reduce((a,x)=>a+x.hrv,0)/history.length);
+        const trend = hrv > avg*1.05 ? '📈 in salita' : hrv < avg*0.95 ? '📉 in calo' : '→ stabile';
+        r += `Media ultimi ${history.length} giorni: ${avg}ms (${trend}). `;
+      }
+      r += interpretHRV(hrv) + ' ';
+    }
+    r += 'Per migliorare l\'HRV: 1) Sonno 7-9h, 2) Respirazione lenta (6 cicli/min), 3) Cold exposure, 4) Esercizio Zone 2, 5) Riduzione stress cronico.';
+    return r;
+  }
+
+  // ── STRESS / ANXIETY ──
+  if (/stress|ansia|ansioso|panico|paura|agitat/.test(m)) {
+    const stressReplies = [
+      'Protocollo anti-stress immediato: 1) Physiological Sigh — doppia inspirazione rapida nasale + lunga espirazione orale (3 cicli), 2) Grounding 5-4-3-2-1 — nomina 5 cose che vedi, 4 tocchi, 3 senti, 2 annusi, 1 gusti, 3) Splash acqua fredda sul viso per 30s — attiva il dive reflex vagale.',
+      'Lo stress cronico tiene la corteccia prefrontale offline e l\'amigdala in overdrive. Sequenza di reset: Box Breathing 5min → Cold exposure viso 30s → Camminata 10min all\'aperto. Questo forza il shift simpatico→parasimpatico.',
+      'Il sistema nervoso non distingue tra minaccia reale e percepita. La buona notizia: puoi hackerarlo. Respirazione lenta (4-8 schema) riduce il cortisolo in 2 minuti. Provalo ora, e poi completa una quest Vagal Reset.',
+    ];
+    let r = _pick(stressReplies);
+    if (debuffs.some(d=>d.id==='anxiety'))
+      r += ' ⚠ Debuff ANSIA attivo — priorità assoluta: recovery vagale.';
+    return r;
+  }
+
+  // ── MOTIVATION ──
+  if (/motiv|pigr|non ho voglia|demotiv|arrender|bloccat|non riesco/.test(m)) {
+    const motivReplies = [
+      `La motivazione non è un prerequisito, è un RISULTATO dell'azione. Regola dei 2 minuti: inizia la quest più facile. Il cervello rilascia dopamina al completamento, non all'inizio.`,
+      `${clsName}, ogni protocollo completato ricabla letteralmente i tuoi circuiti neurali. Non servono imprese epiche — servono microdosi di azione quotidiane. ${streak > 0 ? `Hai ${streak} giorni di streak, non buttarli via.` : 'Inizia la streak oggi: 1 quest, qualsiasi.'}`,
+      `Il cervello resiste al cambiamento perché consuma energia. Ma dopo 2 minuti di azione, il nucleus accumbens si attiva e VUOLE continuare. Il trucco è iniziare, non finire. Scegli 1 quest facile e partenza.`,
+      `${todayCount > 0 ? `Hai già completato ${todayCount} quest oggi. Questo dimostra che puoi farcela — fanne ancora una.` : 'La journey di mille quest inizia con un singolo completamento. Box Breathing è perfetta per partire.'} Ogni quest è un mattone del tuo nuovo sistema nervoso.`,
+    ];
+    return _pick(motivReplies);
+  }
+
+  // ── CLASS ──
+  if (/class|percorso|specializzazione|ruolo/.test(m)) {
+    const primary = cls?.primary || [];
+    const primaryStats = primary.map(id => [...PRIMARY_STATS,...SECONDARY_STATS].find(s=>s.id===id)).filter(Boolean);
+    const primaryLvs = primaryStats.map(s => `${s.icon}${s.name} LV.${getStatLv(s.id)}`).join(', ');
+    const alignedQuests = QUEST_DEFINITIONS.filter(q =>
+      meetsReq(q.req) && q.rewards.some(r=>primary.includes(r.stat))
+    ).slice(0,3);
+    let r = `Classe: ${cls?.icon||''} ${clsName} LV.${classLv}. Stat primarie: ${primaryLvs}. `;
+    r += `"${cls?.desc || ''}" `;
+    if (alignedQuests.length > 0)
+      r += `Quest allineate alla classe: ${alignedQuests.map(q=>q.name).join(', ')}.`;
+    return r;
+  }
+
+  // ── STREAK ──
+  if (/streak|consecutiv|giorni|costanz/.test(m)) {
+    const bonus = Math.min(streak*5,50);
+    let r = `🔥 Streak attuale: ${streak} giorni (+${bonus}% XP bonus, max +50%). `;
+    if (streak === 0)
+      r += 'La streak inizia con 1 giorno. Completa almeno 1 quest oggi per attivarla.';
+    else if (streak < 7)
+      r += `Mancano ${7-streak} giorni per l'achievement STREAK WARRIOR. Non interrompere!`;
+    else if (streak < 30)
+      r += `Mancano ${30-streak} giorni per STREAK LEGEND. Sei sulla buona strada.`;
+    else if (streak < 100)
+      r += `Mancano ${100-streak} giorni per UNSTOPPABLE. Sei una macchina.`;
+    else
+      r += 'Hai superato i 100 giorni. Sei inarrestabile. La disciplina è la tua arma principale.';
+    return r;
+  }
+
+  // ── BIOHACKING ──
+  if (/biohack|hack|ottimizz|supplement|nootropi|protocol/.test(m)) {
+    const bioReplies = [
+      'Stack fondamentale (in ordine di priorità): 1) Sonno 7-9h in ambiente ottimale, 2) Respirazione nasale 24/7, 3) Cold exposure graduale, 4) Esposizione solare mattutina 10min, 5) Allenamento 3-5x/settimana. Questi modificano la neurochimica più di qualsiasi supplemento.',
+      'Protocollo mattutino del biohacker: sveglia costante → esposizione solare 10min → acqua + sale → respirazione 5min → esercizio. Zero caffeina per almeno 90min dopo il risveglio (permette all\'adenosina di clearare).',
+      'Supplementi DOPO aver ottimizzato le basi: Omega-3 (2g EPA+DHA), Magnesio Gliccinato (prima del sonno), Vitamina D3+K2 (se poco sole), Creatina 5g/giorno (neuroprotezione). Ma nessun supplemento compensa sonno cattivo o stress cronico.',
+    ];
+    return _pick(bioReplies);
+  }
+
+  // ── NUTRITION ──
+  if (/cibo|mangi|nutri|diet|aliment|protei|digiun|fast/.test(m)) {
+    const nutriReplies = [
+      'Nutrizione per performance: 1) Proteine 1.6-2g/kg (muscoli + neurotrasmettitori), 2) Omega-3 pesce grasso 2-3x/settimana, 3) Verdure crucifere (broccoli, cavolo), 4) Minimizza zuccheri raffinati e seed oils, 5) Idratazione: 35ml/kg/giorno.',
+      'Timing nutrizionale: pasto proteico post-allenamento (30min), carboidrati complessi la sera (favoriscono serotonina→melatonina per il sonno), grassi + proteine a colazione (stabilità energetica). Evita pasti pesanti 3h prima di dormire.',
+      'Il microbioma intestinale influenza umore, focus e energia. Protocollo: fibre diversificate (30+ vegetali diversi/settimana), cibi fermentati (kimchi, kefir), limitare antibiotici e dolcificanti artificiali. L\'asse intestino-cervello è reale.',
+    ];
+    return _pick(nutriReplies);
+  }
+
+  // ── EXERCISE ──
+  if (/eserciz|allenam|palest|muscol|forza|cardio|corr/.test(m)) {
+    const physQuests = QUEST_DEFINITIONS.filter(q=>q.cat==='PHYSIQUE' && meetsReq(q.req) && !(state.todayCompleted||[]).includes(q.id));
+    let r = _pick([
+      'L\'allenamento è neuroplasticità in azione. BDNF (Brain-Derived Neurotrophic Factor) aumenta del 200% dopo esercizio intenso — rende il cervello più adattabile.',
+      'La forza neurologica (rate coding, reclutamento motorio) migliora prima della massa muscolare. Concentrati su qualità del movimento e progressione dei carichi.',
+    ]);
+    if (physQuests.length > 0)
+      r += ` Quest fisiche disponibili: ${physQuests.slice(0,3).map(q=>`${q.icon} ${q.name}`).join(', ')}.`;
+    return r;
+  }
+
+  // ── FOCUS / CONCENTRATION ──
+  if (/focus|concentr|distrat|attenzione|produttiv/.test(m)) {
+    const focLv = getStatLv('FOC');
+    return _pick([
+      `Focus LV.${focLv}. Per migliorare: 1) Elimina distrazioni FISICAMENTE (telefono in altra stanza), 2) Deep Work in blocchi di 90min, 3) Box Breathing prima della sessione, 4) Una sola task per volta. Il multitasking riduce l'IQ di 10 punti.`,
+      `Protocollo focus: 1) Definisci 1 obiettivo chiaro, 2) Timer 25-90min, 3) Zero notifiche, 4) Se la mente divaga, nota e ritorna. Ogni volta che riporti l'attenzione rinforzi la corteccia prefrontale. Quest consigliata: Deep Work Dungeon.`,
+    ]);
+  }
+
+  // ── COLD ──
+  if (/freddo|cold|ghiacc|doccia fredda|crioterapia/.test(m))
+    return `Cold exposure: la noradrenalina aumenta del 200-300% (immediato, non c'è dose minima sotto la quale non funziona). Protocollo: inizia con 30s doccia fredda, aumenta 15s/giorno. Respirazione nasale durante. Non iperventilare — il brivido è il segnale che funziona. Quest: Protocollo Cold Exposure.`;
+
+  // ── MEDITATION / MINDFULNESS ──
+  if (/medit|mindful|consapevol|presente|zen/.test(m))
+    return _pick([
+      'La meditazione aumenta la materia grigia nella corteccia prefrontale in 8 settimane (Harvard, 2011). 10 minuti al giorno sono sufficienti. Non serve svuotare la mente — basta osservare i pensieri senza agganciarli. Quest: Mindfulness Protocol.',
+      `La pratica contemplativa regolare migliora HRV, riduce il cortisolo basale e rinforza WIL, FOC, RSL. ${getStatLv('FOC') < 5 ? 'Il tuo Focus è basso — la meditazione è il single best investment per te.' : 'Mantieni la pratica per consolidare i tuoi livelli.'}`,
+    ]);
+
+  // ── WEEKLY QUESTS ──
+  if (/weekly|settiman/.test(m)) {
+    const done = (state.weeklyCompleted||[]).length;
+    const total = WEEKLY_QUESTS.length;
+    const available = WEEKLY_QUESTS.filter(wq => !(state.weeklyCompleted||[]).includes(wq.id));
+    let r = `📅 Quest settimanali: ${done}/${total} completate. `;
+    if (available.length > 0)
+      r += `Disponibili: ${available.slice(0,3).map(wq=>`${wq.icon} ${wq.name} (diff ${wq.diff})`).join(', ')}.`;
+    else
+      r += 'Tutte completate questa settimana! Ottimo lavoro.';
+    return r;
+  }
+
+  // ── DEFAULT (context-aware) ──
+  const defaultReplies = [
+    // Progress-aware
+    `${title} LV.${lv}, ${streak}gg di streak, ${state.questsCompleted} quest totali. ${todayCount > 0 ? `Oggi: ${todayCount} quest.` : 'Nessuna quest oggi — è il momento.'} Chiedimi di stat, quest, boss, combo, catene, achievement, o qualsiasi protocollo.`,
+    // Science nuggets
+    'Sapevi che il cervello consuma il 20% dell\'energia totale del corpo ma pesa solo il 2%? Ogni protocollo che completi ottimizza questa macchina. La neuroplasticità non ha scadenza.',
+    'Il nervo vago controlla il 75% del sistema parasimpatico. Stimolarlo (cold exposure, respirazione, gargarismi) è come avere un interruttore manuale per la calma.',
+    'La dopamina non è il neurotrasmettitore del piacere — è della MOTIVAZIONE. Si rilascia nell\'anticipazione della ricompensa e al completamento. Ogni quest completata rinforza questo circuito.',
+    'L\'adenosina si accumula durante la veglia e causa sonnolenza. La caffeina la blocca temporaneamente, ma il sonno è l\'unico modo per eliminarla. Dormire bene = reset completo.',
   ];
-  return tips[Math.floor(Math.random()*tips.length)];
+
+  // Near achievement?
+  const nearAch = _nearAchievements();
+  if (nearAch.length > 0 && Math.random() < 0.4)
+    return `Sei vicino a un achievement! ${nearAch[0].icon} ${nearAch[0].name}: "${nearAch[0].desc}". Concentrati per sbloccarlo!`;
+
+  // Suggest combo?
+  const comboPending = _pendingCombos().filter(c => c.needed.length === 1);
+  if (comboPending.length > 0 && todayCount >= 1 && Math.random() < 0.4)
+    return `Ti manca 1 sola categoria per la combo ${comboPending[0].icon} ${comboPending[0].name}: fai una quest ${comboPending[0].needed[0]} per attivarla!`;
+
+  return _pick(defaultReplies);
 }
 
 // ========================
@@ -2079,17 +2469,33 @@ function sendChat() {
   if (!msg) return;
   input.value = '';
   addChatMsg(msg, 'user');
+  // Typing indicator
+  const msgs = $('chatMsgs');
+  const typing = document.createElement('div');
+  typing.className = 'chat-msg bot typing-indicator';
+  typing.textContent = '...';
+  msgs.appendChild(typing);
+  msgs.scrollTop = msgs.scrollHeight;
   setTimeout(() => {
+    typing.remove();
     const reply = companionReply(msg);
     addChatMsg(reply, 'bot');
-  }, 400+Math.random()*600);
+  }, 500+Math.random()*700);
 }
 
 function addChatMsg(text, who) {
   const msgs = $('chatMsgs');
   const div = document.createElement('div');
   div.className = 'chat-msg ' + who;
-  div.textContent = text;
+  // Support newlines in bot messages
+  if (who === 'bot' && text.includes('\n')) {
+    text.split('\n').forEach((line, i) => {
+      if (i > 0) div.appendChild(document.createElement('br'));
+      div.appendChild(document.createTextNode(line));
+    });
+  } else {
+    div.textContent = text;
+  }
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
 }
