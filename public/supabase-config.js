@@ -28,4 +28,4 @@
 const SUPABASE_URL = 'https://lektscrvjhwslrqbywyd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxla3RzY3J2amh3c2xycWJ5d3lkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNDE2ODcsImV4cCI6MjA4ODkxNzY4N30.-5b3ONtRf9hyWUczQpIbddHNv6gWI1GhO1xodW69x9Q';
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
