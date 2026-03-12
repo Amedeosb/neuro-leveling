@@ -39,6 +39,17 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .btn-google:hover{border-color:var(--secondary);box-shadow:0 0 20px rgba(144,80,255,.3);transform:translateY(-1px)}
 .btn-google:active{transform:translateY(0)}
 .google-icon{flex-shrink:0}
+.login-divider{display:flex;align-items:center;gap:14px;margin:20px 0;color:var(--text-muted);font-size:.82rem;letter-spacing:1px}
+.login-divider::before,.login-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.login-form{display:flex;flex-direction:column;gap:0}
+.login-form .onb-field{margin-bottom:14px}
+.login-form .btn-primary{margin-top:4px}
+.login-form .btn-secondary{margin-top:8px;background:transparent;border:1px solid var(--border);color:var(--text)}
+.login-form .btn-secondary:hover{border-color:var(--secondary);color:var(--secondary)}
+.login-error{background:rgba(255,51,102,.12);border:1px solid rgba(255,51,102,.3);color:#ff5577;padding:10px 14px;border-radius:8px;font-size:.88rem;margin-bottom:12px;text-align:center}
+.login-error.hidden{display:none}
+.btn-link{background:none;border:none;color:var(--text-muted);font-family:var(--font-b);font-size:.82rem;cursor:pointer;margin-top:12px;text-decoration:underline;opacity:.7;transition:opacity .2s}
+.btn-link:hover{opacity:1;color:var(--secondary)}
 .login-footer{font-size:.8rem;color:var(--text-muted);margin-top:20px;opacity:.6}
 
 /* ==================== USER BAR ==================== */

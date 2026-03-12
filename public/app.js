@@ -11,63 +11,124 @@ let _saveTimeout = null;
 
 function $(id) { return document.getElementById(id); }
 
+function showAuthError(msg) {
+  const el = $('authError');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 5000);
+}
+
+function getSupabaseErrorMessage(msg) {
+  if (!msg) return 'Errore di autenticazione. Riprova.';
+  const m = msg.toLowerCase();
+  if (m.includes('already registered')) return 'Questa email è già registrata. Prova ad accedere.';
+  if (m.includes('invalid login')) return 'Email o password non corretti.';
+  if (m.includes('email not confirmed')) return 'Conferma la tua email prima di accedere.';
+  if (m.includes('password')) return 'La password deve avere almeno 6 caratteri.';
+  if (m.includes('rate limit')) return 'Troppi tentativi. Riprova tra qualche minuto.';
+  if (m.includes('invalid email')) return 'Email non valida.';
+  return msg;
+}
+
 // Login con Google
-function googleLogin() {
-  auth.signInWithPopup(googleProvider).catch(err => {
-    console.error('Login error:', err);
-    alert('Errore di login: ' + err.message);
+async function googleLogin() {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin + window.location.pathname }
   });
+  if (error) showAuthError(getSupabaseErrorMessage(error.message));
+}
+
+// Login con Email/Password
+async function emailLogin() {
+  const email = $('authEmail').value.trim();
+  const password = $('authPassword').value;
+  if (!email || !password) { showAuthError('Inserisci email e password.'); return; }
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) showAuthError(getSupabaseErrorMessage(error.message));
+}
+
+// Registrazione con Email/Password
+async function emailRegister() {
+  const email = $('authEmail').value.trim();
+  const password = $('authPassword').value;
+  if (!email || !password) { showAuthError('Inserisci email e password.'); return; }
+  if (password.length < 6) { showAuthError('La password deve avere almeno 6 caratteri.'); return; }
+  const { error } = await supabase.auth.signUp({ email, password });
+  if (error) {
+    showAuthError(getSupabaseErrorMessage(error.message));
+  } else {
+    showAuthError('Account creato! Controlla la tua email per confermare.');
+  }
+}
+
+// Reset password
+async function forgotPassword() {
+  const email = $('authEmail').value.trim();
+  if (!email) { showAuthError('Inserisci la tua email per il reset.'); return; }
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin + window.location.pathname
+  });
+  if (error) {
+    showAuthError(getSupabaseErrorMessage(error.message));
+  } else {
+    showAuthError('Email di reset inviata! Controlla la posta.');
+  }
 }
 
 // Logout
-function logout() {
-  auth.signOut();
+async function logout() {
+  await supabase.auth.signOut();
 }
 
-// Carica stato da Firestore, con fallback su localStorage
+// Carica stato da Supabase, con fallback su localStorage
 async function loadStateFromCloud(uid) {
   try {
-    const doc = await db.collection('players').doc(uid).get();
-    if (doc.exists) {
-      return { ...DEFAULT_STATE, ...doc.data() };
+    const { data, error } = await supabase
+      .from('players')
+      .select('state')
+      .eq('id', uid)
+      .single();
+    if (data && data.state) {
+      return { ...DEFAULT_STATE, ...data.state };
     }
     // Migra da localStorage se esiste
     const local = localStorage.getItem('neuro_leveling_v2');
     if (local) {
       const parsed = { ...DEFAULT_STATE, ...JSON.parse(local) };
-      await db.collection('players').doc(uid).set(parsed);
+      await supabase.from('players').upsert({ id: uid, state: parsed });
       return parsed;
     }
   } catch (e) {
-    console.error('Firestore load error:', e);
-    // Fallback locale
+    console.error('Supabase load error:', e);
     const local = localStorage.getItem('neuro_leveling_v2');
     if (local) return { ...DEFAULT_STATE, ...JSON.parse(local) };
   }
   return { ...DEFAULT_STATE };
 }
 
-// Salva su Firestore + localStorage (debounced)
+// Salva su Supabase + localStorage (debounced)
 function saveState() {
   localStorage.setItem('neuro_leveling_v2', JSON.stringify(state));
   if (!currentUser) return;
   clearTimeout(_saveTimeout);
   _saveTimeout = setTimeout(() => {
-    db.collection('players').doc(currentUser.uid).set(state)
-      .catch(e => console.error('Firestore save error:', e));
+    supabase.from('players').upsert({ id: currentUser.id, state: state })
+      .then(({ error }) => { if (error) console.error('Supabase save error:', error); });
   }, 1000);
 }
 
 // Auth state listener — entry point dell'app
-auth.onAuthStateChanged(async (user) => {
-  if (user) {
-    currentUser = user;
+supabase.auth.onAuthStateChange(async (event, session) => {
+  if (session && session.user) {
+    currentUser = session.user;
     $('loginScreen').classList.add('hidden');
     // Mostra info utente
-    $('userAvatar').src = user.photoURL || '';
-    $('userEmail').textContent = user.email;
+    const meta = currentUser.user_metadata || {};
+    $('userAvatar').src = meta.avatar_url || meta.picture || '';
+    $('userEmail').textContent = currentUser.email || '';
     // Carica dati dal cloud
-    state = await loadStateFromCloud(user.uid);
+    state = await loadStateFromCloud(currentUser.id);
     init();
   } else {
     currentUser = null;
@@ -80,7 +141,14 @@ auth.onAuthStateChanged(async (user) => {
 // Event listeners login/logout
 document.addEventListener('DOMContentLoaded', () => {
   $('btnGoogleLogin').addEventListener('click', googleLogin);
+  $('btnEmailLogin').addEventListener('click', emailLogin);
+  $('btnEmailRegister').addEventListener('click', emailRegister);
+  $('btnForgotPassword').addEventListener('click', forgotPassword);
   $('btnLogout').addEventListener('click', logout);
+  // Enter key per login rapido
+  $('authPassword').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') emailLogin();
+  });
 });
 
 // ========================
