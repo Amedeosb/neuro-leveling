@@ -252,6 +252,8 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .chat-msg{padding:12px 14px;border-radius:12px;font-size:.95rem;line-height:1.5;max-width:88%;word-wrap:break-word}
 .chat-msg.bot{background:var(--surface);border:1px solid var(--border);color:var(--text-dim);align-self:flex-start;border-bottom-left-radius:4px}
 .chat-msg.user{background:linear-gradient(135deg,rgba(144,80,255,.2),rgba(0,212,255,.1));border:1px solid var(--secondary);color:var(--text);align-self:flex-end;border-bottom-right-radius:4px}
+.chat-msg.typing-indicator{opacity:.6;animation:typingPulse .8s ease-in-out infinite}
+@keyframes typingPulse{0%,100%{opacity:.4}50%{opacity:.9}}
 .chat-bar{display:flex;gap:8px;padding:10px 0;flex-shrink:0;border-top:1px solid var(--border)}
 .chat-input{flex:1;padding:12px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-family:var(--font-b);font-size:1rem;outline:none}
 .chat-input:focus{border-color:var(--secondary)}
