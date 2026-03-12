@@ -1360,17 +1360,18 @@ function renderStatus() {
   $('playerTitleBar').textContent = getTitle();
   $('totalLvPill').textContent = getTotalLevel();
 
-  // XP bar — totalXP progress toward next milestone (always goes up)
-  const XP_MILESTONES = [0,500,1500,3500,7000,12000,20000,35000,60000,100000,175000,300000,500000,1000000];
-  let prevM = 0, nextM = XP_MILESTONES[1];
-  for (let i = 1; i < XP_MILESTONES.length; i++) {
-    if (state.totalXP < XP_MILESTONES[i]) { prevM = XP_MILESTONES[i-1]; nextM = XP_MILESTONES[i]; break; }
-    if (i === XP_MILESTONES.length - 1) { prevM = XP_MILESTONES[i]; nextM = XP_MILESTONES[i] * 2; }
+  // XP bar — combined residual XP of all stats vs combined next-level threshold
+  const ALL_STATS = [...PRIMARY_STATS, ...SECONDARY_STATS];
+  let xpCur = 0, xpNeed = 0;
+  for (const s of ALL_STATS) {
+    const lv = getStatLv(s.id);
+    xpCur += state.stats[s.id]?.xp ?? 0;
+    xpNeed += xpForLevel(lv + 1);
   }
-  const pct = nextM > prevM ? Math.min(((state.totalXP - prevM) / (nextM - prevM)) * 100, 100) : 100;
+  const pct = xpNeed > 0 ? Math.min((xpCur / xpNeed) * 100, 100) : 0;
   $('xpBarFill').style.width = pct+'%';
-  $('xpCur').textContent = state.totalXP;
-  $('xpNext').textContent = nextM;
+  $('xpCur').textContent = xpCur;
+  $('xpNext').textContent = xpNeed;
 
   // Primary stats
   const priEl = $('statsPrimary');
