@@ -27,6 +27,27 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 @keyframes g1{0%,90%,100%{clip-path:inset(0);transform:none}93%{clip-path:inset(20% 0 40%);transform:translate(-3px,1px)}96%{clip-path:inset(60% 0 10%);transform:translate(3px,-1px)}}
 @keyframes g2{0%,88%,100%{clip-path:inset(0);transform:none}91%{clip-path:inset(40% 0 20%);transform:translate(3px,-2px)}95%{clip-path:inset(10% 0 60%);transform:translate(-3px,1px)}}
 
+/* ==================== LOGIN SCREEN ==================== */
+.login-screen{position:fixed;inset:0;z-index:9000;background:var(--bg);display:flex;align-items:center;justify-content:center}
+.login-screen.hidden{display:none}
+.login-container{max-width:380px;padding:40px 28px;text-align:center}
+.login-logo{font-size:4rem;margin:0 0 12px;filter:drop-shadow(0 0 25px rgba(144,80,255,.6));animation:float 3s ease-in-out infinite}
+.login-title{font-family:var(--font-d);font-size:1.8rem;font-weight:900;letter-spacing:4px;color:var(--primary);text-shadow:0 0 20px rgba(0,212,255,.4);margin-bottom:4px}
+.login-subtitle{font-family:var(--font-m);font-size:.82rem;color:var(--text-muted);letter-spacing:3px;margin-bottom:24px}
+.login-desc{font-size:.95rem;color:var(--text-dim);line-height:1.5;margin-bottom:32px}
+.btn-google{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;padding:14px 20px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-family:var(--font-d);font-size:1rem;font-weight:600;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
+.btn-google:hover{border-color:var(--secondary);box-shadow:0 0 20px rgba(144,80,255,.3);transform:translateY(-1px)}
+.btn-google:active{transform:translateY(0)}
+.google-icon{flex-shrink:0}
+.login-footer{font-size:.8rem;color:var(--text-muted);margin-top:20px;opacity:.6}
+
+/* ==================== USER BAR ==================== */
+.user-bar{display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border)}
+.user-avatar{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);object-fit:cover}
+.user-email{flex:1;font-family:var(--font-m);font-size:.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-logout{background:none;border:1px solid var(--border);color:var(--text-muted);font-size:1rem;padding:4px 10px;border-radius:6px;cursor:pointer;transition:all .2s}
+.btn-logout:hover{border-color:var(--danger);color:var(--danger)}
+
 /* ==================== ONBOARDING ==================== */
 .onboarding{position:fixed;inset:0;z-index:8000;background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch}
 .onboarding.hidden{display:none}
