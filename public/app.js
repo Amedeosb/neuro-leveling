@@ -32,7 +32,7 @@ function getSupabaseErrorMessage(msg) {
 
 // Login con Google
 async function googleLogin() {
-  const { error } = await supabase.auth.signInWithOAuth({
+  const { error } = await supabaseClient.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: window.location.origin + window.location.pathname }
   });
@@ -44,7 +44,7 @@ async function emailLogin() {
   const email = $('authEmail').value.trim();
   const password = $('authPassword').value;
   if (!email || !password) { showAuthError('Inserisci email e password.'); return; }
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
   if (error) showAuthError(getSupabaseErrorMessage(error.message));
 }
 
@@ -54,7 +54,7 @@ async function emailRegister() {
   const password = $('authPassword').value;
   if (!email || !password) { showAuthError('Inserisci email e password.'); return; }
   if (password.length < 6) { showAuthError('La password deve avere almeno 6 caratteri.'); return; }
-  const { error } = await supabase.auth.signUp({ email, password });
+  const { error } = await supabaseClient.auth.signUp({ email, password });
   if (error) {
     showAuthError(getSupabaseErrorMessage(error.message));
   } else {
@@ -66,7 +66,7 @@ async function emailRegister() {
 async function forgotPassword() {
   const email = $('authEmail').value.trim();
   if (!email) { showAuthError('Inserisci la tua email per il reset.'); return; }
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+  const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
     redirectTo: window.location.origin + window.location.pathname
   });
   if (error) {
@@ -78,13 +78,13 @@ async function forgotPassword() {
 
 // Logout
 async function logout() {
-  await supabase.auth.signOut();
+  await supabaseClient.auth.signOut();
 }
 
 // Carica stato da Supabase, con fallback su localStorage
 async function loadStateFromCloud(uid) {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('players')
       .select('state')
       .eq('id', uid)
@@ -96,7 +96,7 @@ async function loadStateFromCloud(uid) {
     const local = localStorage.getItem('neuro_leveling_v2');
     if (local) {
       const parsed = { ...DEFAULT_STATE, ...JSON.parse(local) };
-      await supabase.from('players').upsert({ id: uid, state: parsed });
+      await supabaseClient.from('players').upsert({ id: uid, state: parsed });
       return parsed;
     }
   } catch (e) {
@@ -113,14 +113,14 @@ function saveState() {
   if (!currentUser) return;
   clearTimeout(_saveTimeout);
   _saveTimeout = setTimeout(() => {
-    supabase.from('players').upsert({ id: currentUser.id, state: state })
+    supabaseClient.from('players').upsert({ id: currentUser.id, state: state })
       .then(({ error }) => { if (error) console.error('Supabase save error:', error); });
   }, 1000);
 }
 
 // Auth state listener — entry point dell'app
 let _authInitialized = false;
-supabase.auth.onAuthStateChange(async (event, session) => {
+supabaseClient.auth.onAuthStateChange(async (event, session) => {
   // Aspetta che il DOM sia pronto
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
