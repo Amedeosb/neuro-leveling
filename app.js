@@ -126,15 +126,28 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
   if (session && session.user) {
-    currentUser = session.user;
-    $('loginScreen').classList.add('hidden');
-    // Mostra info utente
-    const meta = currentUser.user_metadata || {};
-    $('userAvatar').src = meta.avatar_url || meta.picture || '';
-    $('userEmail').textContent = currentUser.email || '';
-    // Carica dati dal cloud
-    state = await loadStateFromCloud(currentUser.id);
-    init();
+    try {
+      currentUser = session.user;
+      $('loginScreen').classList.add('hidden');
+      // Mostra info utente
+      const meta = currentUser.user_metadata || {};
+      $('userAvatar').src = meta.avatar_url || meta.picture || '';
+      $('userEmail').textContent = currentUser.email || '';
+      // Carica dati dal cloud
+      state = await loadStateFromCloud(currentUser.id);
+      init();
+    } catch (e) {
+      console.error('Init error:', e);
+      // Fallback: mostra comunque l'app con stato locale
+      try {
+        state = loadState();
+        init();
+      } catch (e2) {
+        console.error('Fallback init error:', e2);
+        // Ultimo tentativo: mostra login screen
+        $('loginScreen').classList.remove('hidden');
+      }
+    }
   } else {
     currentUser = null;
     if ($('loginScreen')) {
@@ -144,6 +157,20 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
     }
   }
 });
+
+// Safety net: se dopo 5s non è visibile nulla, mostra login screen
+setTimeout(() => {
+  const login = document.getElementById('loginScreen');
+  const app = document.getElementById('mainApp');
+  const onb = document.getElementById('onboarding');
+  const loginHidden = login && login.classList.contains('hidden');
+  const appHidden = !app || app.classList.contains('hidden');
+  const onbHidden = !onb || onb.classList.contains('hidden');
+  if (loginHidden && appHidden && onbHidden) {
+    console.warn('Black screen detected — showing login screen as fallback');
+    if (login) login.classList.remove('hidden');
+  }
+}, 5000);
 
 // Event listeners login/logout
 document.addEventListener('DOMContentLoaded', () => {
