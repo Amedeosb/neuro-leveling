@@ -1360,15 +1360,20 @@ function renderStatus() {
   $('playerTitleBar').textContent = getTitle();
   $('totalLvPill').textContent = getTotalLevel();
 
-  // XP bar (next total level)
+  // XP bar — average progress of primary stats toward their next level
   const totalLv = getTotalLevel();
-  const xpNext = xpForLevel(totalLv+1);
-  // Approximate XP by summing residual xp across primary stats
-  const xpCur = PRIMARY_STATS.reduce((a,s) => a + (state.stats[s.id]?.xp ?? 0), 0);
-  const pct = Math.min((xpCur / Math.max(xpNext,1)) * 100, 100);
+  let xpCurSum = 0, xpNextSum = 0;
+  for (const s of PRIMARY_STATS) {
+    const lv = getStatLv(s.id);
+    const cur = state.stats[s.id]?.xp ?? 0;
+    const next = xpForLevel(lv + 1);
+    xpCurSum += cur;
+    xpNextSum += next;
+  }
+  const pct = xpNextSum > 0 ? Math.min((xpCurSum / xpNextSum) * 100, 100) : 0;
   $('xpBarFill').style.width = pct+'%';
-  $('xpCur').textContent = xpCur;
-  $('xpNext').textContent = xpNext;
+  $('xpCur').textContent = xpCurSum;
+  $('xpNext').textContent = xpNextSum;
 
   // Primary stats
   const priEl = $('statsPrimary');
