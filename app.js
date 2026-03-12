@@ -119,7 +119,12 @@ function saveState() {
 }
 
 // Auth state listener — entry point dell'app
+let _authInitialized = false;
 supabase.auth.onAuthStateChange(async (event, session) => {
+  // Aspetta che il DOM sia pronto
+  if (document.readyState === 'loading') {
+    await new Promise(r => document.addEventListener('DOMContentLoaded', r));
+  }
   if (session && session.user) {
     currentUser = session.user;
     $('loginScreen').classList.add('hidden');
@@ -132,9 +137,11 @@ supabase.auth.onAuthStateChange(async (event, session) => {
     init();
   } else {
     currentUser = null;
-    $('loginScreen').classList.remove('hidden');
-    $('onboarding').classList.add('hidden');
-    $('mainApp').classList.add('hidden');
+    if ($('loginScreen')) {
+      $('loginScreen').classList.remove('hidden');
+      $('onboarding').classList.add('hidden');
+      $('mainApp').classList.add('hidden');
+    }
   }
 });
 
