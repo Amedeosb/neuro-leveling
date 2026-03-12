@@ -53,6 +53,7 @@
       </div>
 
       <p class="login-footer">I tuoi dati sono salvati in modo sicuro nel cloud.</p>
+      <button id="btnEmergencyReset" style="margin-top:16px;background:none;border:1px solid #333;color:#666;padding:8px 16px;border-radius:6px;font-size:.75rem;cursor:pointer;display:none">🔄 Reset sessione</button>
     </div>
   </div>
 
@@ -399,7 +400,7 @@
   <script src="supabase-config.js"></script>
   <script src="app.js"></script>
   <script>
-    // Catch-all: se dopo 3s schermata nera, forza la login screen
+    // Catch-all: se dopo 2s schermata nera, forza la login screen
     setTimeout(function() {
       var ls = document.getElementById('loginScreen');
       var ma = document.getElementById('mainApp');
@@ -408,10 +409,24 @@
         && (!ma || ma.classList.contains('hidden'))
         && (!ob || ob.classList.contains('hidden'));
       if (allHidden && ls) {
-        console.warn('Fallback: showing login screen after 3s timeout');
+        console.warn('Fallback: showing login screen after timeout');
         ls.classList.remove('hidden');
+        // Mostra bottone di reset
+        var btn = document.getElementById('btnEmergencyReset');
+        if (btn) btn.style.display = 'inline-block';
       }
-    }, 3000);
+    }, 2000);
+    // Emergency reset: pulisce tutta la sessione e ricarica
+    document.addEventListener('click', function(e) {
+      if (e.target && e.target.id === 'btnEmergencyReset') {
+        localStorage.clear();
+        // Pulisci anche i cookie Supabase
+        document.cookie.split(';').forEach(function(c) {
+          document.cookie = c.trim().split('=')[0] + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+        });
+        window.location.reload();
+      }
+    });
   </script>
 </body>
 </html>

@@ -125,26 +125,30 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
+  _authInitialized = true;
   if (session && session.user) {
     try {
       currentUser = session.user;
-      $('loginScreen').classList.add('hidden');
-      // Mostra info utente
+      // NON nascondere loginScreen finché init() non ha successo
       const meta = currentUser.user_metadata || {};
       $('userAvatar').src = meta.avatar_url || meta.picture || '';
       $('userEmail').textContent = currentUser.email || '';
-      // Carica dati dal cloud
-      state = await loadStateFromCloud(currentUser.id);
+      // Carica dati dal cloud con timeout di 8s
+      const loadPromise = loadStateFromCloud(currentUser.id);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Cloud load timeout')), 8000));
+      state = await Promise.race([loadPromise, timeoutPromise]);
       init();
+      // Solo ORA nascondi la login screen (init riuscito)
+      $('loginScreen').classList.add('hidden');
     } catch (e) {
       console.error('Init error:', e);
-      // Fallback: mostra comunque l'app con stato locale
+      // Fallback: prova con stato locale
       try {
         state = loadState();
         init();
+        $('loginScreen').classList.add('hidden');
       } catch (e2) {
         console.error('Fallback init error:', e2);
-        // Ultimo tentativo: mostra login screen
         $('loginScreen').classList.remove('hidden');
       }
     }
@@ -157,20 +161,6 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
     }
   }
 });
-
-// Safety net: se dopo 5s non è visibile nulla, mostra login screen
-setTimeout(() => {
-  const login = document.getElementById('loginScreen');
-  const app = document.getElementById('mainApp');
-  const onb = document.getElementById('onboarding');
-  const loginHidden = login && login.classList.contains('hidden');
-  const appHidden = !app || app.classList.contains('hidden');
-  const onbHidden = !onb || onb.classList.contains('hidden');
-  if (loginHidden && appHidden && onbHidden) {
-    console.warn('Black screen detected — showing login screen as fallback');
-    if (login) login.classList.remove('hidden');
-  }
-}, 5000);
 
 // Event listeners login/logout
 document.addEventListener('DOMContentLoaded', () => {
