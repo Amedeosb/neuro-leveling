@@ -125,33 +125,16 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
-  _authInitialized = true;
   if (session && session.user) {
-    try {
-      currentUser = session.user;
-      // NON nascondere loginScreen finché init() non ha successo
-      const meta = currentUser.user_metadata || {};
-      $('userAvatar').src = meta.avatar_url || meta.picture || '';
-      $('userEmail').textContent = currentUser.email || '';
-      // Carica dati dal cloud con timeout di 8s
-      const loadPromise = loadStateFromCloud(currentUser.id);
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Cloud load timeout')), 8000));
-      state = await Promise.race([loadPromise, timeoutPromise]);
-      init();
-      // Solo ORA nascondi la login screen (init riuscito)
-      $('loginScreen').classList.add('hidden');
-    } catch (e) {
-      console.error('Init error:', e);
-      // Fallback: prova con stato locale
-      try {
-        state = loadState();
-        init();
-        $('loginScreen').classList.add('hidden');
-      } catch (e2) {
-        console.error('Fallback init error:', e2);
-        $('loginScreen').classList.remove('hidden');
-      }
-    }
+    currentUser = session.user;
+    $('loginScreen').classList.add('hidden');
+    // Mostra info utente
+    const meta = currentUser.user_metadata || {};
+    $('userAvatar').src = meta.avatar_url || meta.picture || '';
+    $('userEmail').textContent = currentUser.email || '';
+    // Carica dati dal cloud
+    state = await loadStateFromCloud(currentUser.id);
+    init();
   } else {
     currentUser = null;
     if ($('loginScreen')) {
