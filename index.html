@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>NEURO-LEVELING</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- OVERLAYS -->
+  <div class="scanlines"></div>
+  <div class="vignette"></div>
+  <div class="glitch-overlay" id="glitchOverlay"></div>
+
+  <!-- ============================== -->
+  <!-- ONBOARDING (shown first time)  -->
+  <!-- ============================== -->
+  <div class="onboarding" id="onboarding">
+    <div class="onb-container">
+      <!-- Step 0: Welcome -->
+      <div class="onb-step active" id="onbStep0">
+        <div class="onb-logo">⚡</div>
+        <h1 class="onb-title glitch-text" data-text="NEURO-LEVELING">NEURO-LEVELING</h1>
+        <p class="onb-subtitle">SISTEMA DI AUTO-OTTIMIZZAZIONE</p>
+        <p class="onb-desc">Stai per entrare nel sistema. Una serie di assessment determinerà il tuo profilo iniziale, la tua classe e i tuoi punti base.</p>
+        <div class="onb-field">
+          <label class="onb-label">IL TUO NOME</label>
+          <input type="text" class="onb-input" id="onbName" placeholder="Hunter..." maxlength="20" autocomplete="off" required>
+        </div>
+        <button class="btn-primary full-w" id="onbStart">INIZIA ASSESSMENT →</button>
+      </div>
+
+      <!-- Step 1: Formazione -->
+      <div class="onb-step" id="onbStep1">
+        <div class="onb-step-ind">1 / 6</div>
+        <h2 class="onb-step-title">📚 ISTRUZIONE</h2>
+        <p class="onb-step-desc">Background formativo → Intelligenza, Disciplina</p>
+        <div class="onb-field">
+          <label class="onb-label">Livello di istruzione</label>
+          <select class="onb-select" id="onbEducation">
+            <option value="1">Diploma superiore</option>
+            <option value="2">Laurea triennale</option>
+            <option value="3">Laurea magistrale</option>
+            <option value="4">Master / Specializzazione</option>
+            <option value="5">Dottorato / PhD</option>
+          </select>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Anni di studio attivo post-diploma</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbStudyYears" min="0" max="15" value="3"><span class="onb-slider-val" id="valStudyYears">3</span></div>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Quanto leggi / studi attualmente? (1-10)</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbReadHabit" min="1" max="10" value="5"><span class="onb-slider-val" id="valReadHabit">5</span></div>
+        </div>
+        <div class="onb-nav"><button class="btn-secondary" data-prev="0">←</button><button class="btn-primary" data-next="2">AVANTI →</button></div>
+      </div>
+
+      <!-- Step 2: Sport -->
+      <div class="onb-step" id="onbStep2">
+        <div class="onb-step-ind">2 / 6</div>
+        <h2 class="onb-step-title">💪 SPORT & FISICO</h2>
+        <p class="onb-step-desc">Storia atletica → Forza, Resistenza, Agilità</p>
+        <div class="onb-field">
+          <label class="onb-label">Anni di pratica sportiva</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbSportYears" min="0" max="30" value="5"><span class="onb-slider-val" id="valSportYears">5</span></div>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Livello sportivo raggiunto</label>
+          <select class="onb-select" id="onbSportLevel">
+            <option value="0">Sedentario</option>
+            <option value="1">Amatoriale occasionale</option>
+            <option value="2">Amatoriale regolare</option>
+            <option value="3">Agonistico locale</option>
+            <option value="4">Agonistico nazionale</option>
+            <option value="5">Professionista / Elite</option>
+          </select>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Allenamenti a settimana</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbWeeklyTraining" min="0" max="14" value="3"><span class="onb-slider-val" id="valWeeklyTraining">3</span></div>
+        </div>
+        <div class="onb-nav"><button class="btn-secondary" data-prev="1">←</button><button class="btn-primary" data-next="3">AVANTI →</button></div>
+      </div>
+
+      <!-- Step 3: Esperienza -->
+      <div class="onb-step" id="onbStep3">
+        <div class="onb-step-ind">3 / 6</div>
+        <h2 class="onb-step-title">🏢 ESPERIENZA</h2>
+        <p class="onb-step-desc">Lavoro e vita → Carisma, Leadership, Adattabilità</p>
+        <div class="onb-field">
+          <label class="onb-label">Anni di esperienza lavorativa</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbWorkYears" min="0" max="40" value="5"><span class="onb-slider-val" id="valWorkYears">5</span></div>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Gestione team / progetti</label>
+          <select class="onb-select" id="onbLeadership">
+            <option value="0">Mai</option>
+            <option value="1">Piccoli progetti</option>
+            <option value="2">Team 2-5 persone</option>
+            <option value="3">Team 5-20 persone</option>
+            <option value="4">Dipartimento / Azienda</option>
+          </select>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Cambiamenti importanti affrontati</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbChanges" min="0" max="20" value="3"><span class="onb-slider-val" id="valChanges">3</span></div>
+        </div>
+        <div class="onb-nav"><button class="btn-secondary" data-prev="2">←</button><button class="btn-primary" data-next="4">AVANTI →</button></div>
+      </div>
+
+      <!-- Step 4: Mente -->
+      <div class="onb-step" id="onbStep4">
+        <div class="onb-step-ind">4 / 6</div>
+        <h2 class="onb-step-title">🧠 MENTE & BENESSERE</h2>
+        <p class="onb-step-desc">Stato mentale → Volontà, Focus, Resilienza</p>
+        <div class="onb-field">
+          <label class="onb-label">Meditazione / mindfulness</label>
+          <select class="onb-select" id="onbMeditation">
+            <option value="0">Mai provato</option>
+            <option value="1">Raramente</option>
+            <option value="2">Qualche volta al mese</option>
+            <option value="3">Settimanalmente</option>
+            <option value="4">Quotidianamente</option>
+          </select>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Gestione dello stress (1-10)</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbStress" min="1" max="10" value="5"><span class="onb-slider-val" id="valStress">5</span></div>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Qualità media del sonno (1-10)</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbSleepQuality" min="1" max="10" value="6"><span class="onb-slider-val" id="valSleepQuality">6</span></div>
+        </div>
+        <div class="onb-nav"><button class="btn-secondary" data-prev="3">←</button><button class="btn-primary" data-next="5">AVANTI →</button></div>
+      </div>
+
+      <!-- Step 5: Social -->
+      <div class="onb-step" id="onbStep5">
+        <div class="onb-step-ind">5 / 6</div>
+        <h2 class="onb-step-title">🤝 SOCIAL & RELAZIONI</h2>
+        <p class="onb-step-desc">Relazioni → Carisma, Empatia, Tono Vagale</p>
+        <div class="onb-field">
+          <label class="onb-label">Comfort in situazioni sociali (1-10)</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbSocial" min="1" max="10" value="5"><span class="onb-slider-val" id="valSocial">5</span></div>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Public speaking</label>
+          <select class="onb-select" id="onbPublicSpeaking">
+            <option value="0">Mai</option>
+            <option value="1">Poche volte</option>
+            <option value="2">Regolarmente</option>
+            <option value="3">Conferenze / eventi</option>
+          </select>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Empatia autogiudicata (1-10)</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbEmpathy" min="1" max="10" value="6"><span class="onb-slider-val" id="valEmpathy">6</span></div>
+        </div>
+        <div class="onb-nav"><button class="btn-secondary" data-prev="4">←</button><button class="btn-primary" data-next="6">AVANTI →</button></div>
+      </div>
+
+      <!-- Step 6: Biohacking -->
+      <div class="onb-step" id="onbStep6">
+        <div class="onb-step-ind">6 / 6</div>
+        <h2 class="onb-step-title">🧬 BIOHACKING & NUTRIZIONE</h2>
+        <p class="onb-step-desc">Abitudini → Vitalità, parametri neurochimici</p>
+        <div class="onb-field">
+          <label class="onb-label">Qualità alimentazione (1-10)</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbNutrition" min="1" max="10" value="5"><span class="onb-slider-val" id="valNutrition">5</span></div>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Esperienza biohacking</label>
+          <select class="onb-select" id="onbBiohack">
+            <option value="0">Nessuna</option>
+            <option value="1">Ho letto qualcosa</option>
+            <option value="2">Pratico respirazione / cold exposure</option>
+            <option value="3">Monitoro HRV / biomarcatori</option>
+            <option value="4">Praticante avanzato</option>
+          </select>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">Ore di sonno medie</label>
+          <div class="onb-slider-row"><input type="range" class="onb-slider" id="onbSleepHours" min="4" max="10" value="7" step="0.5"><span class="onb-slider-val" id="valSleepHours">7</span></div>
+        </div>
+        <div class="onb-nav"><button class="btn-secondary" data-prev="5">←</button><button class="btn-primary" id="onbFinish">COMPLETA ⚡</button></div>
+      </div>
+
+      <!-- Step 7: Class Reveal -->
+      <div class="onb-step" id="onbStep7">
+        <div class="onb-result-icon" id="classIcon">⚡</div>
+        <h2 class="onb-result-title glitch-text" data-text="CLASSE ASSEGNATA">CLASSE ASSEGNATA</h2>
+        <div class="onb-class-name glitch-text" data-text="" id="className"></div>
+        <div class="onb-class-desc" id="classDesc"></div>
+        <div class="onb-stats-preview" id="statsPreview"></div>
+        <button class="btn-primary full-w" id="onbEnter">ENTRA NEL SISTEMA →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- MAIN APP                        -->
+  <!-- ============================== -->
+  <div class="app hidden" id="mainApp">
+
+    <nav class="nav-bar">
+      <button class="nav-btn active" data-screen="status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>STATUS</span></button>
+      <button class="nav-btn" data-screen="quests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg><span>QUEST</span></button>
+      <button class="nav-btn boss-btn" data-screen="boss"><div class="boss-btn-inner">💀</div><span>BOSS</span></button>
+      <button class="nav-btn" data-screen="companion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg><span>GUIDE</span></button>
+      <button class="nav-btn" data-screen="assess"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span>ASSESS</span></button>
+    </nav>
+
+    <!-- STATUS -->
+    <section class="screen active" id="screenStatus">
+      <div class="screen-content">
+        <div class="status-header">
+          <div><h1 class="glitch-text player-name-lg" data-text="" id="playerNameLg"></h1><div class="player-class-badge" id="playerClassBadge"></div></div>
+          <div class="level-pill"><span class="lp-label">LV</span><span class="lp-value" id="totalLvPill">1</span></div>
+        </div>
+        <div class="player-title-bar" id="playerTitleBar">NEOPHYTE</div>
+        <div class="xp-section"><div class="xp-bar-outer"><div class="xp-bar-fill" id="xpBarFill" style="width:0%"></div></div><div class="xp-text"><span id="xpCur">0</span> / <span id="xpNext">100</span> XP</div></div>
+        <div class="section-label">STATS PRINCIPALI</div>
+        <div class="stats-list" id="statsPrimary"></div>
+        <div class="section-label">STATS SECONDARIE</div>
+        <div class="stats-list" id="statsSecondary"></div>
+        <div class="section-label">DEBUFF ATTIVI</div>
+        <div class="debuffs-list" id="debuffsList"><div class="debuff-card ok">◈ SISTEMA STABILE</div></div>
+        <div class="mini-grid">
+          <div class="mg"><div class="mg-v" id="streakV">0</div><div class="mg-l">STREAK</div></div>
+          <div class="mg"><div class="mg-v" id="totalXpV">0</div><div class="mg-l">XP TOT</div></div>
+          <div class="mg"><div class="mg-v" id="questsDoneV">0</div><div class="mg-l">QUEST</div></div>
+          <div class="mg"><div class="mg-v" id="bossKillsV">0</div><div class="mg-l">BOSS☠</div></div>
+        </div>
+        <div class="section-label">BUFF ATTIVI</div>
+        <div id="statusBuffs" class="status-buffs"></div>
+        <div class="section-label">FAZIONI</div>
+        <div id="statusFactions" class="status-factions"></div>
+        <div class="section-label">ACHIEVEMENT</div>
+        <div id="statusAchievements" class="status-achievements"></div>
+      </div>
+    </section>
+
+    <!-- QUESTS -->
+    <section class="screen" id="screenQuests">
+      <div class="screen-content">
+        <h1 class="screen-title glitch-text" data-text="QUEST BOARD">QUEST BOARD</h1>
+        <div class="quest-tabs" id="questTabs"></div>
+        <div id="activeBuffsBanner"></div>
+        <div class="quest-progress"><div class="qp-fill" id="qpFill" style="width:0%"></div><span class="qp-text" id="qpText">0/0</span></div>
+        <div class="quest-list" id="questList"></div>
+        <div class="rewards-banner">RICOMPENSE: <strong id="totalRewXp">0 XP</strong></div>
+        <div class="combo-tracker" id="comboTracker"></div>
+      </div>
+    </section>
+
+    <!-- BOSS -->
+    <section class="screen" id="screenBoss">
+      <div class="boss-subview active" id="bossListView">
+        <div class="screen-content">
+          <h1 class="screen-title glitch-text glitch-heavy" data-text="BOSS CHAMBER">BOSS CHAMBER</h1>
+          <div class="boss-skull-center">💀<div class="boss-skull-sub">SCONFIGGI IL BOSS</div></div>
+          <div class="boss-grid" id="bossGrid"></div>
+        </div>
+      </div>
+      <div class="boss-subview" id="bossFightView">
+        <div class="screen-content fight-content">
+          <div class="boss-hp-sec"><div class="boss-hp-lbl">HP: <span id="bossHpPct">100</span>%</div><div class="boss-hp-track"><div class="boss-hp-fill" id="bossHpFill" style="width:100%"></div></div></div>
+          <div class="boss-fight-icon">💀</div>
+          <h2 class="boss-fight-name glitch-text" data-text="" id="bossFightName"></h2>
+          <div class="protocol-lbl">PROTOCOLLO: <span id="protocolLbl">—</span></div>
+          <div class="timer-wrap"><svg viewBox="0 0 120 120" class="timer-svg"><circle cx="60" cy="60" r="54" class="timer-track"/><circle cx="60" cy="60" r="54" class="timer-progress" id="timerProg"/></svg><div class="timer-val" id="timerVal">00:00</div></div>
+          <div class="protocol-instr" id="protocolInstr">Premi ESEGUI per iniziare.</div>
+          <div class="fight-btns"><button class="btn-primary" id="btnExec">ESEGUI STEP</button><button class="btn-danger" id="btnRetreat">RITIRATA</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- COMPANION -->
+    <section class="screen" id="screenCompanion">
+      <div class="screen-content companion-screen">
+        <div class="companion-hdr"><div class="companion-avatar">👁</div><div><div class="companion-name">SHADOW GUIDE</div><div class="companion-role">Consulente Neuro-Tattico</div></div></div>
+        <div class="chat-messages" id="chatMsgs"><div class="chat-msg bot">Benvenuto, Hunter. Sono il tuo Shadow Guide. Chiedimi qualsiasi cosa.</div></div>
+        <div class="chat-bar"><input type="text" class="chat-input" id="chatInput" placeholder="Scrivi..." autocomplete="off"><button class="chat-send" id="chatSend">→</button></div>
+      </div>
+    </section>
+
+    <!-- ASSESS -->
+    <section class="screen" id="screenAssess">
+      <div class="screen-content">
+        <h1 class="screen-title glitch-text" data-text="ASSESSMENT">ASSESSMENT</h1>
+        <p class="screen-sub">Valutazione biometrica giornaliera</p>
+        <div id="assessForm">
+          <div class="af"><label class="af-lbl">HRV <span class="af-u">(ms)</span></label><div class="af-row"><input type="range" class="af-slider" id="inHrv" min="10" max="200" value="60"><span class="af-val" id="vHrv">60</span></div></div>
+          <div class="af"><label class="af-lbl">BOLT <span class="af-u">(sec)</span></label><div class="af-row"><input type="range" class="af-slider" id="inBolt" min="3" max="80" value="20"><span class="af-val" id="vBolt">20</span></div></div>
+          <div class="af"><label class="af-lbl">MOOD <span class="af-u">/10</span></label><div class="af-row"><input type="range" class="af-slider" id="inMood" min="1" max="10" value="5"><span class="af-val" id="vMood">5</span></div></div>
+          <div class="af"><label class="af-lbl">ENERGY <span class="af-u">/10</span></label><div class="af-row"><input type="range" class="af-slider" id="inEnergy" min="1" max="10" value="5"><span class="af-val" id="vEnergy">5</span></div></div>
+          <div class="af"><label class="af-lbl">SLEEP <span class="af-u">/10</span></label><div class="af-row"><input type="range" class="af-slider" id="inSleep" min="1" max="10" value="5"><span class="af-val" id="vSleep">5</span></div></div>
+          <button class="btn-primary full-w" id="btnAssess">ANALIZZA ⚡</button>
+        </div>
+        <div class="assess-result hidden" id="assessResult">
+          <div class="ans-badge" id="ansBadge">EQUILIBRATO</div>
+          <div class="assess-metrics" id="assessMetrics"></div>
+          <div class="rest-alert hidden" id="restAlert">⚠ FORCED REST DAY</div>
+          <div class="assess-debuffs" id="assessDebuffs"></div>
+          <button class="btn-secondary full-w" id="btnReassess">NUOVA VALUTAZIONE</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- TOASTS -->
+  <div class="toast-container" id="toastContainer"></div>
+  <!-- OVERLAYS -->
+  <div class="overlay hidden" id="levelUpOverlay"><div class="overlay-box"><div class="ov-icon">⬆</div><h2 class="ov-title glitch-text" data-text="LEVEL UP!">LEVEL UP!</h2><div class="ov-detail" id="lvlDetail"></div><button class="btn-primary" id="btnDismissLvl">CONTINUA</button></div></div>
+  <div class="overlay hidden" id="bossDefeatOverlay"><div class="overlay-box"><div class="ov-icon">☠</div><h2 class="ov-title glitch-text" data-text="BOSS DEFEATED">BOSS DEFEATED</h2><div class="ov-detail" id="defDetail"></div><button class="btn-primary" id="btnDismissDef">RACCOGLI</button></div></div>
+
+  <!-- TIMED QUEST OVERLAY -->
+  <div class="overlay hidden" id="timedQuestOverlay">
+    <div class="overlay-box tq-box">
+      <div class="tq-header">
+        <div class="ov-icon">⏱</div>
+        <h2 class="ov-title" id="tqName">Quest</h2>
+        <div class="tq-mode-badge" id="tqMode">MEDIA</div>
+      </div>
+      <div class="tq-target" id="tqTarget">Obiettivo: 30 min</div>
+      <div class="tq-timer-display">
+        <div class="tq-elapsed" id="tqElapsed">00:00</div>
+        <div class="tq-bonus-prev" id="tqBonusPrev">Avvia per iniziare</div>
+      </div>
+      <div class="tq-protocol" id="tqProtocol"></div>
+      <div class="tq-actions">
+        <button class="btn-primary full-w" id="btnTqStart">▶ AVVIA TIMER</button>
+        <button class="btn-primary full-w hidden" id="btnTqStop">✔ COMPLETA QUEST</button>
+        <button class="btn-danger full-w" id="btnTqCancel">✕ ANNULLA</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
