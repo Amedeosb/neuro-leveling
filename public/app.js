@@ -1509,10 +1509,19 @@ function renderDailyQuests(dailyBonus) {
     const timedTag = q.timed ? '<span class="timed-tag">⏱ TIMED</span>' : '';
     const doneModeBadge = doneInfo?.mode ? `<span class="done-mode-badge" style="color:${DIFFICULTY_MODES[doneInfo.mode].color}">${DIFFICULTY_MODES[doneInfo.mode].icon} ${DIFFICULTY_MODES[doneInfo.mode].label}</span>` : '';
 
-    // XP preview for each mode
+    // XP preview for each mode (matches completeQuest formula)
     const xpPreview = !done && !locked ? `<div class="diff-mode-selector" data-qid="${q.id}">
       ${Object.entries(DIFFICULTY_MODES).map(([k,m]) => {
-        const mXP = Math.round(totalRew * m.xpMult);
+        const diffEff = Math.max(1, q.diff + m.diffOffset);
+        const mRarity = getQuestRarity(diffEff);
+        const mRarityMult = RARITY_MULT[mRarity];
+        let mXP = 0;
+        for (const rew of q.rewards) {
+          const pen = getDebuffPenalty(rew.stat);
+          let eff = calcXP(rew.xp, diffEff, state.currentStreak, pen);
+          eff = Math.round(eff * mRarityMult * m.xpMult);
+          mXP += eff;
+        }
         return `<button class="diff-mode-btn" data-mode="${k}" data-qid="${q.id}" style="border-color:${m.color}"><span class="dm-icon">${m.icon}</span><span class="dm-label">${m.label}</span><span class="dm-xp">+${mXP}</span></button>`;
       }).join('')}
     </div>` : '';
@@ -1525,7 +1534,7 @@ function renderDailyQuests(dailyBonus) {
           <div class="q-name">${q.name} ${bonusTag} ${timedTag} ${doneModeBadge}</div>
           <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
           <div class="q-desc">${q.desc}</div>
-          <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${totalRew} XP</span></div>
+          <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
           ${xpPreview}
           <div class="q-detail" id="detail-${q.id}">
             <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
@@ -1541,7 +1550,11 @@ function renderDailyQuests(dailyBonus) {
   const pct = total > 0 ? Math.round((done/total)*100) : 0;
   $('qpFill').style.width = pct+'%';
   $('qpText').textContent = `${done} / ${total}`;
-  const totalXP = currentQuests.reduce((a,q) => a + q.rewards.reduce((b,r) => b + r.xp, 0), 0);
+  const totalXP = currentQuests.reduce((a,q) => {
+    const de = Math.max(1, q.diff);
+    const rr = RARITY_MULT[getQuestRarity(de)];
+    return a + q.rewards.reduce((b,r) => b + Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr), 0);
+  }, 0);
   $('totalRewXp').textContent = totalXP + ' XP';
 
   // Mode button handlers
