@@ -539,30 +539,30 @@ const COMBO_DEFINITIONS = [
   {
     id:'mind_body', name:'MIND-BODY LINK', desc:'1 PHYSIQUE + 1 COGNITIVE', icon:'🔗',
     check: (done) => {
-      const cats = done.map(id => QUEST_DEFINITIONS.find(q=>q.id===id)?.cat).filter(Boolean);
+      const cats = done.map(id => findQuestById(id)?.cat).filter(Boolean);
       return cats.includes('PHYSIQUE') && cats.includes('COGNITIVE');
     }, bonusXP:50, bonusStat:'ADA',
   },
   {
     id:'full_spectrum', name:'FULL SPECTRUM', desc:'1 per ogni categoria', icon:'🌈',
     check: (done) => {
-      const cats = new Set(done.map(id => QUEST_DEFINITIONS.find(q=>q.id===id)?.cat).filter(Boolean));
+      const cats = new Set(done.map(id => findQuestById(id)?.cat).filter(Boolean));
       return cats.has('PHYSIQUE') && cats.has('COGNITIVE') && cats.has('NEURAL') && cats.has('SOCIAL');
     }, bonusXP:100, bonusStat:'VIT',
   },
   {
     id:'iron_will', name:'VOLONTÀ DI FERRO', desc:'3+ quest diff ≥ 6', icon:'🔥',
-    check: (done) => done.filter(id => (QUEST_DEFINITIONS.find(x=>x.id===id)?.diff??0) >= 6).length >= 3,
+    check: (done) => done.filter(id => (findQuestById(id)?.diff??0) >= 6).length >= 3,
     bonusXP:80, bonusStat:'WIL',
   },
   {
     id:'recovery_master', name:'RECUPERO TOTALE', desc:'2+ quest recovery/facili', icon:'💚',
-    check: (done) => done.filter(id => { const q=QUEST_DEFINITIONS.find(x=>x.id===id); return q&&(q.type==='RECOVERY'||q.diff<=3); }).length >= 2,
+    check: (done) => done.filter(id => { const q=findQuestById(id); return q&&(q.type==='RECOVERY'||q.diff<=3); }).length >= 2,
     bonusXP:40, bonusStat:'VAG',
   },
   {
     id:'social_butterfly', name:'FARFALLA SOCIALE', desc:'2+ quest SOCIAL', icon:'🦋',
-    check: (done) => done.filter(id => QUEST_DEFINITIONS.find(x=>x.id===id)?.cat==='SOCIAL').length >= 2,
+    check: (done) => done.filter(id => findQuestById(id)?.cat==='SOCIAL').length >= 2,
     bonusXP:60, bonusStat:'CHA',
   },
 ];
@@ -681,9 +681,15 @@ const DEFAULT_STATE = {
   criticalHits: 0,
   todayCompletedDetails: [],
   questTab: 'daily',
+  customQuests: [],
 };
 
 let state = { ...DEFAULT_STATE };
+
+// Helper: find quest by ID across built-in + custom
+function findQuestById(id) {
+  return QUEST_DEFINITIONS.find(q => q.id === id) || (state.customQuests || []).find(q => q.id === id);
+}
 
 function loadState() {
   try {
@@ -939,7 +945,7 @@ function resetWeeklyIfNeeded() {
 function checkWeeklyCompletion(wq) {
   if (wq.subQuests?.length > 0) return wq.subQuests.every(sq => state.todayCompleted.includes(sq));
   if (wq.id === 'w_full_spectrum') {
-    const cats = new Set(state.todayCompleted.map(id => QUEST_DEFINITIONS.find(x=>x.id===id)?.cat).filter(Boolean));
+    const cats = new Set(state.todayCompleted.map(id => findQuestById(id)?.cat).filter(Boolean));
     return cats.has('PHYSIQUE') && cats.has('COGNITIVE') && cats.has('NEURAL') && cats.has('SOCIAL');
   }
   return false;
@@ -1048,9 +1054,10 @@ function isForcedRest() {
 // ========================
 
 function getAvailableQuests(assessment) {
+  const allQuests = [...QUEST_DEFINITIONS, ...(state.customQuests || [])];
   const rest = isForcedRest();
-  if (rest) return QUEST_DEFINITIONS.filter(q=>q.type==='RECOVERY');
-  return QUEST_DEFINITIONS.filter(q => {
+  if (rest) return allQuests.filter(q=>q.type==='RECOVERY');
+  return allQuests.filter(q => {
     if (!meetsReq(q.req)) return false;
     if (assessment?.ansState==='SYMPATHETIC' && q.cat==='PHYSIQUE' && q.diff>6) return false;
     return true;
@@ -1063,10 +1070,89 @@ function getAvailableQuests(assessment) {
 }
 
 // ========================
-// COMPANION AI  (local deterministic)
+// COMPANION AI  (Gemini-powered with local fallback)
 // ========================
 
-function companionReply(msg) {
+const AI_MODEL = 'gemini-2.0-flash';
+
+function getAiApiKey() {
+  return localStorage.getItem('neuro_ai_key') || '';
+}
+
+function setAiApiKey(key) {
+  localStorage.setItem('neuro_ai_key', key);
+}
+
+function buildSystemPrompt() {
+  const cls = CLASS_DEFINITIONS.find(c => c.id === state.playerClass);
+  const clsName = cls?.name ?? 'Hunter';
+  const lv = getTotalLevel();
+  const streak = state.currentStreak;
+  const lastA = state.assessmentHistory[state.assessmentHistory.length - 1];
+  const debuffs = state.activeDebuffs || [];
+  const topStats = [...PRIMARY_STATS].sort((a, b) => getStatLv(b.id) - getStatLv(a.id)).slice(0, 3);
+  const weakStat = [...PRIMARY_STATS].sort((a, b) => getStatLv(a.id) - getStatLv(b.id))[0];
+  const todayDone = (state.todayCompleted || []).length;
+  const totalQuests = state.questsCompleted || 0;
+  const bossesDefeated = (state.bossesDefeated || []).length;
+
+  return `Sei lo SHADOW GUIDE, un consulente neuro-tattico dentro un'app di gamification chiamata NEURO-LEVELING (ispirata a Solo Leveling).
+Rispondi SEMPRE in italiano. Sii conciso, diretto, motivante e in tema col gioco. Usa il tono di un mentore misterioso e saggio.
+Non usare emoji in eccesso. Max 2-3 frasi per risposta tranne se l'utente chiede spiegazioni dettagliate.
+
+CONTESTO GIOCATORE:
+- Nome: ${state.playerName || 'Hunter'}
+- Classe: ${clsName} (LV.${getClassLevel()})
+- Livello totale: ${lv}
+- Streak: ${streak} giorni
+- Quest completate oggi: ${todayDone}
+- Quest totali: ${totalQuests}
+- Boss sconfitti: ${bossesDefeated}/${BOSS_DEFINITIONS.length}
+- Stat migliori: ${topStats.map(s => `${s.name} LV.${getStatLv(s.id)}`).join(', ')}
+- Stat più debole: ${weakStat.name} LV.${getStatLv(weakStat.id)}
+- Debuff attivi: ${debuffs.length > 0 ? debuffs.map(d => d.name).join(', ') : 'Nessuno'}
+- Ultimo assessment: ${lastA ? `HRV ${lastA.hrv}ms, BOLT ${lastA.bolt}s, Mood ${lastA.mood}/10, Energy ${lastA.energy}/10, Sleep ${lastA.sleep}/10, Stato SNA: ${lastA.ansState}` : 'Non ancora eseguito'}
+- Quest personalizzate: ${(state.customQuests || []).length}
+
+COMPETENZE:
+- Biohacking, neuroscienze, respirazione, cold exposure, HRV, tono vagale
+- Protocolli di ottimizzazione fisica e mentale (Huberman, Wim Hof, ecc.)
+- Motivazione, discipline, gestione dello stress
+- Consigli su quest, boss, stat, progressione nel gioco
+
+Rispondi alle domande del giocatore con consigli personalizzati basati sul suo profilo.`;
+}
+
+async function companionReplyAI(msg) {
+  const apiKey = getAiApiKey();
+  if (!apiKey) return companionReplyLocal(msg);
+
+  try {
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL}:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: buildSystemPrompt() }] },
+        contents: [{ parts: [{ text: msg }] }],
+        generationConfig: { maxOutputTokens: 300, temperature: 0.8 },
+      }),
+    });
+
+    if (!resp.ok) {
+      if (resp.status === 400 || resp.status === 403) return 'Chiave API non valida. Configurala nelle impostazioni (⚙).';
+      return companionReplyLocal(msg);
+    }
+
+    const data = await resp.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (text) return text.trim();
+    return companionReplyLocal(msg);
+  } catch (e) {
+    return companionReplyLocal(msg);
+  }
+}
+
+function companionReplyLocal(msg) {
   const m = msg.toLowerCase().trim();
   const lv = getTotalLevel();
   const cls = CLASS_DEFINITIONS.find(c=>c.id===state.playerClass);
@@ -1473,14 +1559,17 @@ let questTab = 'daily';
 function renderQuestTabs() {
   const tabs = $('questTabs');
   if (!tabs) return;
-  tabs.innerHTML = ['daily','weekly','chains'].map(t => {
-    const labels = { daily:'DAILY', weekly:'WEEKLY', chains:'CHAINS' };
+  const tabList = ['daily','weekly','chains','custom'];
+  const labels = { daily:'DAILY', weekly:'WEEKLY', chains:'CHAINS', custom:'CUSTOM' };
+  tabs.innerHTML = tabList.map(t => {
     const active = questTab === t ? 'tab-active' : '';
     return `<button class="quest-tab ${active}" data-tab="${t}">${labels[t]}</button>`;
-  }).join('');
-  tabs.querySelectorAll('.quest-tab').forEach(btn => {
+  }).join('') + `<button class="quest-tab add-quest-btn" id="btnAddQuestTab">＋</button>`;
+  tabs.querySelectorAll('.quest-tab[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => { questTab = btn.dataset.tab; renderQuests(); });
   });
+  const addBtn = $('btnAddQuestTab');
+  if (addBtn) addBtn.addEventListener('click', openCreateQuestModal);
 }
 
 function renderQuests() {
@@ -1488,6 +1577,7 @@ function renderQuests() {
   const dailyBonus = getDailyBonus();
   if (questTab === 'daily') renderDailyQuests(dailyBonus);
   else if (questTab === 'weekly') renderWeeklyQuests();
+  else if (questTab === 'custom') renderCustomQuests();
   else renderChainQuests();
   renderActiveBuffsBanner();
   renderComboTracker();
@@ -1591,7 +1681,7 @@ let timedQuestStart = 0;
 let timedQuestInterval = null;
 
 function startQuestWithMode(qid, mode) {
-  const quest = QUEST_DEFINITIONS.find(q=>q.id===qid);
+  const quest = findQuestById(qid);
   if (!quest) return;
   if (!meetsReq(quest.req)) { showToast('Requisiti non soddisfatti','alert'); return; }
   if (getDoneInfo(qid)) { showToast('Quest già completata oggi','alert'); return; }
@@ -2063,6 +2153,260 @@ $('btnDismissDef').addEventListener('click', () => {
 });
 
 // ========================
+// CUSTOM QUEST SYSTEM
+// ========================
+
+let editingQuestId = null;
+
+function openCreateQuestModal(editId) {
+  editingQuestId = null;
+  const modal = $('customQuestModal');
+  if (!modal) return;
+
+  // Populate stat selects
+  const allStats = [...PRIMARY_STATS, ...SECONDARY_STATS];
+  const statOpts = allStats.map(s => `<option value="${s.id}">${s.icon} ${s.name}</option>`).join('');
+  $('cqRewardStat').innerHTML = statOpts;
+  $('cqExtraRewards').innerHTML = '';
+
+  // Reset form
+  $('cqName').value = '';
+  $('cqDesc').value = '';
+  $('cqDiff').value = 5; $('valCqDiff').textContent = '5';
+  $('cqDur').value = 15;
+  $('cqTimed').checked = false;
+  $('cqCat').value = 'COGNITIVE';
+  $('cqRewardXp').value = 30; $('valCqRewardXp').textContent = '30';
+  $('cqProtocol').value = '';
+  $$('.cq-icon-btn').forEach(b => b.classList.remove('selected'));
+  const firstIcon = document.querySelector('.cq-icon-btn');
+  if (firstIcon) firstIcon.classList.add('selected');
+
+  // If editing, fill values
+  if (editId) {
+    const q = (state.customQuests || []).find(x => x.id === editId);
+    if (q) {
+      editingQuestId = editId;
+      $('cqName').value = q.name;
+      $('cqDesc').value = q.desc;
+      $('cqDiff').value = q.diff; $('valCqDiff').textContent = q.diff;
+      $('cqDur').value = q.dur;
+      $('cqTimed').checked = !!q.timed;
+      $('cqCat').value = q.cat;
+      if (q.rewards[0]) {
+        $('cqRewardStat').value = q.rewards[0].stat;
+        $('cqRewardXp').value = q.rewards[0].xp; $('valCqRewardXp').textContent = q.rewards[0].xp;
+      }
+      $('cqProtocol').value = (q.protocol || []).join('\n');
+      $$('.cq-icon-btn').forEach(b => {
+        b.classList.toggle('selected', b.dataset.icon === q.icon);
+      });
+      // Extra rewards
+      if (q.rewards.length > 1) {
+        for (let i = 1; i < q.rewards.length; i++) {
+          addExtraRewardRow(q.rewards[i].stat, q.rewards[i].xp);
+        }
+      }
+    }
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function addExtraRewardRow(stat, xp) {
+  const allStats = [...PRIMARY_STATS, ...SECONDARY_STATS];
+  const statOpts = allStats.map(s => `<option value="${s.id}" ${s.id === stat ? 'selected' : ''}>${s.icon} ${s.name}</option>`).join('');
+  const div = document.createElement('div');
+  div.className = 'cq-reward-row cq-extra';
+  div.innerHTML = `<select class="onb-select cq-stat-sel cq-extra-stat">${statOpts}</select>
+    <div class="onb-slider-row cq-xp-row"><input type="range" class="onb-slider cq-extra-xp" min="10" max="80" value="${xp||20}"><span class="onb-slider-val">${xp||20}</span> XP</div>
+    <button class="cq-remove-reward">✕</button>`;
+  div.querySelector('.cq-extra-xp').addEventListener('input', e => {
+    e.target.nextElementSibling.textContent = e.target.value;
+  });
+  div.querySelector('.cq-remove-reward').addEventListener('click', () => div.remove());
+  $('cqExtraRewards').appendChild(div);
+}
+
+function saveCustomQuest() {
+  const name = $('cqName').value.trim();
+  const desc = $('cqDesc').value.trim();
+  if (!name) { showToast('Inserisci un nome', 'alert'); return; }
+
+  const icon = document.querySelector('.cq-icon-btn.selected')?.dataset?.icon || '⭐';
+  const cat = $('cqCat').value;
+  const diff = parseInt($('cqDiff').value);
+  const dur = parseInt($('cqDur').value) || 15;
+  const timed = $('cqTimed').checked;
+  const rewards = [{ stat: $('cqRewardStat').value, xp: parseInt($('cqRewardXp').value) }];
+
+  // Extra rewards
+  $$('.cq-extra').forEach(row => {
+    const st = row.querySelector('.cq-extra-stat').value;
+    const xp = parseInt(row.querySelector('.cq-extra-xp').value);
+    if (st && xp > 0) rewards.push({ stat: st, xp });
+  });
+
+  const protocolText = $('cqProtocol').value.trim();
+  const protocol = protocolText ? protocolText.split('\n').filter(l => l.trim()) : ['Completa la quest'];
+
+  if (!state.customQuests) state.customQuests = [];
+
+  if (editingQuestId) {
+    const idx = state.customQuests.findIndex(q => q.id === editingQuestId);
+    if (idx >= 0) {
+      state.customQuests[idx] = { ...state.customQuests[idx], name, desc, icon, cat, diff, dur, timed, rewards, protocol };
+    }
+  } else {
+    const id = 'custom_' + Date.now();
+    state.customQuests.push({
+      id, name, desc, icon, cat, diff, dur, timed, rewards, protocol,
+      type: 'DAILY', req: [], science: 'Quest personalizzata.', isCustom: true,
+    });
+  }
+
+  saveState();
+  $('customQuestModal').classList.add('hidden');
+  editingQuestId = null;
+  showToast(editingQuestId ? 'Quest aggiornata!' : 'Quest creata!', 'success');
+  renderQuests();
+}
+
+function deleteCustomQuest(id) {
+  if (!state.customQuests) return;
+  state.customQuests = state.customQuests.filter(q => q.id !== id);
+  saveState();
+  showToast('Quest eliminata', 'alert');
+  renderQuests();
+}
+
+function renderCustomQuests() {
+  const listEl = $('questList');
+  const customs = state.customQuests || [];
+
+  if (customs.length === 0) {
+    listEl.innerHTML = `<div class="cq-empty">
+      <div class="cq-empty-icon">📋</div>
+      <p>Nessuna quest personalizzata.</p>
+      <button class="btn-primary" id="btnCreateFirstQuest">＋ CREA LA TUA PRIMA QUEST</button>
+    </div>`;
+    const btn = $('btnCreateFirstQuest');
+    if (btn) btn.addEventListener('click', () => openCreateQuestModal());
+    $('qpFill').style.width = '0%';
+    $('qpText').textContent = '0 / 0';
+    $('totalRewXp').textContent = '0 XP';
+    return;
+  }
+
+  listEl.innerHTML = customs.map(q => {
+    const rank = getRank(q.diff);
+    const rarity = getQuestRarity(q.diff);
+    const doneInfo = getDoneInfo(q.id);
+    const done = !!doneInfo;
+    const cls = done ? 'done' : '';
+    const rarityTag = `<span class="rarity-badge rarity-${rarity.toLowerCase()}">${RARITY_LABELS[rarity]}</span>`;
+    const timedTag = q.timed ? '<span class="timed-tag">⏱ TIMED</span>' : '';
+    const customTag = '<span class="custom-tag">✦ CUSTOM</span>';
+    const doneModeBadge = doneInfo?.mode ? `<span class="done-mode-badge" style="color:${DIFFICULTY_MODES[doneInfo.mode].color}">${DIFFICULTY_MODES[doneInfo.mode].icon} ${DIFFICULTY_MODES[doneInfo.mode].label}</span>` : '';
+
+    const xpPreview = !done ? `<div class="diff-mode-selector" data-qid="${q.id}">
+      ${Object.entries(DIFFICULTY_MODES).map(([k,m]) => {
+        const diffEff = Math.max(1, q.diff + m.diffOffset);
+        const mRarity = getQuestRarity(diffEff);
+        const mRarityMult = RARITY_MULT[mRarity];
+        let mXP = 0;
+        for (const rew of q.rewards) {
+          const pen = getDebuffPenalty(rew.stat);
+          let eff = calcXP(rew.xp, diffEff, state.currentStreak, pen);
+          eff = Math.round(eff * mRarityMult * m.xpMult);
+          mXP += eff;
+        }
+        return `<button class="diff-mode-btn" data-mode="${k}" data-qid="${q.id}" style="border-color:${m.color}"><span class="dm-icon">${m.icon}</span><span class="dm-label">${m.label}</span><span class="dm-xp">+${mXP}</span></button>`;
+      }).join('')}
+    </div>` : '';
+
+    return `
+      <div class="quest-card ${cls} rarity-border-${rarity.toLowerCase()}" data-quest-id="${q.id}" data-cat="${q.cat}">
+        <div class="q-check">${done ? '✓' : ''}</div>
+        <span class="q-icon">${q.icon}</span>
+        <div class="q-body">
+          <div class="q-name">${q.name} ${customTag} ${timedTag} ${doneModeBadge}</div>
+          <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
+          <div class="q-desc">${q.desc || ''}</div>
+          <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
+          ${xpPreview}
+          <div class="q-detail" id="detail-${q.id}">
+            <ol>${(q.protocol||[]).map(p=>`<li>${p}</li>`).join('')}</ol>
+            <div class="cq-card-actions">
+              <button class="btn-secondary cq-edit-btn" data-id="${q.id}">✏ MODIFICA</button>
+              <button class="btn-danger cq-del-btn" data-id="${q.id}">🗑 ELIMINA</button>
+            </div>
+          </div>
+        </div>
+        <div class="q-rank rk-${rank}">${rank}</div>
+      </div>`;
+  }).join('');
+
+  const total = customs.length;
+  const done = customs.filter(q => getDoneInfo(q.id)).length;
+  const pct = total > 0 ? Math.round((done/total)*100) : 0;
+  $('qpFill').style.width = pct+'%';
+  $('qpText').textContent = `${done} / ${total}`;
+  const totalXP = customs.reduce((a,q) => {
+    const de = Math.max(1, q.diff);
+    const rr = RARITY_MULT[getQuestRarity(de)];
+    return a + q.rewards.reduce((b,r) => b + Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr), 0);
+  }, 0);
+  $('totalRewXp').textContent = totalXP + ' XP';
+
+  // Mode button handlers
+  listEl.querySelectorAll('.diff-mode-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startQuestWithMode(btn.dataset.qid, btn.dataset.mode);
+    });
+  });
+
+  // Edit/delete handlers
+  listEl.querySelectorAll('.cq-edit-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); openCreateQuestModal(btn.dataset.id); });
+  });
+  listEl.querySelectorAll('.cq-del-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); deleteCustomQuest(btn.dataset.id); });
+  });
+
+  // Card click: toggle detail
+  listEl.querySelectorAll('.quest-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.diff-mode-btn') || e.target.closest('.cq-edit-btn') || e.target.closest('.cq-del-btn')) return;
+      const qid = card.dataset.questId;
+      const p = $('detail-'+qid);
+      if (p) p.classList.toggle('open');
+    });
+  });
+}
+
+function initCustomQuestModal() {
+  $('cqDiff').addEventListener('input', () => { $('valCqDiff').textContent = $('cqDiff').value; });
+  $('cqRewardXp').addEventListener('input', () => { $('valCqRewardXp').textContent = $('cqRewardXp').value; });
+
+  $$('.cq-icon-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      $$('.cq-icon-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
+
+  $('btnAddReward').addEventListener('click', (e) => { e.preventDefault(); addExtraRewardRow(); });
+  $('btnSaveQuest').addEventListener('click', saveCustomQuest);
+  $('btnCancelQuest').addEventListener('click', () => {
+    $('customQuestModal').classList.add('hidden');
+    editingQuestId = null;
+  });
+}
+
+// ========================
 // COMPANION CHAT
 // ========================
 
@@ -2071,18 +2415,48 @@ function initCompanion() {
   $('chatInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') sendChat();
   });
+  // AI config buttons
+  const cfgBtn = $('btnAiConfig');
+  if (cfgBtn) cfgBtn.addEventListener('click', openAiConfig);
+  const saveKeyBtn = $('btnSaveAiKey');
+  if (saveKeyBtn) saveKeyBtn.addEventListener('click', () => {
+    const key = $('aiApiKey').value.trim();
+    setAiApiKey(key);
+    $('aiConfigModal').classList.add('hidden');
+    showToast(key ? 'API Key salvata!' : 'API Key rimossa', 'success');
+  });
+  const cancelCfg = $('btnCancelAiConfig');
+  if (cancelCfg) cancelCfg.addEventListener('click', () => {
+    $('aiConfigModal').classList.add('hidden');
+  });
 }
 
-function sendChat() {
+function openAiConfig() {
+  $('aiApiKey').value = getAiApiKey();
+  $('aiConfigModal').classList.remove('hidden');
+}
+
+async function sendChat() {
   const input = $('chatInput');
   const msg = input.value.trim();
   if (!msg) return;
   input.value = '';
   addChatMsg(msg, 'user');
-  setTimeout(() => {
-    const reply = companionReply(msg);
-    addChatMsg(reply, 'bot');
-  }, 400+Math.random()*600);
+
+  // Show typing indicator
+  const typingId = 'typing-' + Date.now();
+  const msgs = $('chatMsgs');
+  const typingDiv = document.createElement('div');
+  typingDiv.className = 'chat-msg bot typing';
+  typingDiv.id = typingId;
+  typingDiv.innerHTML = '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>';
+  msgs.appendChild(typingDiv);
+  msgs.scrollTop = msgs.scrollHeight;
+
+  const reply = await companionReplyAI(msg);
+  const el = document.getElementById(typingId);
+  if (el) el.remove();
+  addChatMsg(reply, 'bot');
 }
 
 function addChatMsg(text, who) {
@@ -2208,12 +2582,14 @@ function init() {
   if (!state.factionRep)       state.factionRep = { PHYSIQUE:0, COGNITIVE:0, NEURAL:0, SOCIAL:0 };
   if (state.criticalHits == null) state.criticalHits = 0;
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
+  if (!state.customQuests)     state.customQuests = [];
 
   initStats();
   resetWeeklyIfNeeded();
   cleanExpiredBuffs();
   initOnboarding();
   initCompanion();
+  initCustomQuestModal();
   initAssessment();
   initTimedQuestOverlay();
   if (state.onboardingDone) {

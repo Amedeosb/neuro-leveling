@@ -250,7 +250,7 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .companion-role{font-family:var(--font-m);font-size:.82rem;color:var(--text-muted)}
 .chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px 0;min-height:0}
 .chat-msg{padding:12px 14px;border-radius:12px;font-size:.95rem;line-height:1.5;max-width:88%;word-wrap:break-word}
-.chat-msg.bot{background:var(--surface);border:1px solid var(--border);color:var(--text-dim);align-self:flex-start;border-bottom-left-radius:4px}
+.chat-msg.bot{background:var(--surface);border:1px solid var(--border);color:var(--text-dim);align-self:flex-start;border-bottom-left-radius:4px;white-space:pre-wrap}
 .chat-msg.user{background:linear-gradient(135deg,rgba(144,80,255,.2),rgba(0,212,255,.1));border:1px solid var(--secondary);color:var(--text);align-self:flex-end;border-bottom-right-radius:4px}
 .chat-bar{display:flex;gap:8px;padding:10px 0;flex-shrink:0;border-top:1px solid var(--border)}
 .chat-input{flex:1;padding:12px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-family:var(--font-b);font-size:1rem;outline:none}
@@ -403,3 +403,50 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .tq-protocol ol{padding-left:18px;margin:0}
 .tq-protocol li{margin-bottom:4px}
 .tq-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+
+/* ==================== CUSTOM QUEST MODAL ==================== */
+.cq-modal{max-width:420px;width:92%;max-height:90vh;overflow-y:auto;text-align:left;padding:24px 20px}
+.cq-modal .ov-title{text-align:center;font-size:1.3rem;margin-bottom:16px}
+.cq-form{display:flex;flex-direction:column;gap:0}
+.cq-row{display:flex;gap:12px}
+.cq-half{flex:1}
+.cq-icons{display:flex;flex-wrap:wrap;gap:6px}
+.cq-icon-btn{width:40px;height:40px;border:1px solid var(--border);background:var(--surface);border-radius:6px;font-size:1.3rem;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center}
+.cq-icon-btn:hover{border-color:var(--secondary)}
+.cq-icon-btn.selected{border-color:var(--primary);background:rgba(0,212,255,.12);box-shadow:0 0 10px rgba(0,212,255,.2)}
+.cq-reward-row{display:flex;gap:8px;align-items:center}
+.cq-stat-sel{flex:0 0 120px;font-size:.85rem;padding:8px 10px}
+.cq-xp-row{flex:1;font-family:var(--font-m);font-size:.85rem;color:var(--warning)}
+.cq-textarea{resize:vertical;min-height:80px;font-family:var(--font-m);font-size:.9rem;line-height:1.6}
+.cq-actions{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+.cq-extra{margin-top:8px;display:flex;gap:8px;align-items:center}
+.cq-remove-reward{background:none;border:1px solid var(--accent);color:var(--accent);border-radius:4px;width:28px;height:28px;cursor:pointer;font-size:.9rem;display:flex;align-items:center;justify-content:center}
+.cq-hint{font-family:var(--font-m);font-size:.78rem;color:var(--text-muted);margin-top:4px}
+.cq-toggle{position:relative;display:inline-block;width:44px;height:24px;margin-top:6px}
+.cq-toggle input{opacity:0;width:0;height:0}
+.cq-toggle-slider{position:absolute;inset:0;background:var(--surface2);border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:all .3s}
+.cq-toggle-slider::before{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;background:var(--text-muted);border-radius:50%;transition:all .3s}
+.cq-toggle input:checked+.cq-toggle-slider{background:rgba(0,212,255,.2);border-color:var(--primary)}
+.cq-toggle input:checked+.cq-toggle-slider::before{transform:translateX(20px);background:var(--primary)}
+.cq-empty{text-align:center;padding:40px 20px;color:var(--text-muted)}
+.cq-empty-icon{font-size:3rem;margin-bottom:12px;opacity:.5}
+.cq-empty p{margin-bottom:16px;font-family:var(--font-m);font-size:.9rem}
+.cq-card-actions{display:flex;gap:8px;margin-top:10px}
+.cq-card-actions .btn-secondary,.cq-card-actions .btn-danger{flex:1;padding:8px 12px;font-size:.75rem}
+.custom-tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.65rem;font-weight:700;background:rgba(0,212,255,.15);color:var(--primary);margin-left:4px}
+.add-quest-btn{flex:0 0 auto!important;padding:10px 14px!important;background:rgba(0,212,255,.08)!important;border-color:var(--primary)!important;color:var(--primary)!important;font-size:1.1rem!important;letter-spacing:0!important}
+.add-quest-btn:hover{background:rgba(0,212,255,.18)!important}
+
+/* ==================== AI CONFIG ==================== */
+.ai-config-btn{background:none;border:1px solid var(--border);color:var(--text-muted);width:36px;height:36px;border-radius:50%;font-size:1.1rem;cursor:pointer;margin-left:auto;transition:all .2s;display:flex;align-items:center;justify-content:center}
+.ai-config-btn:hover{border-color:var(--secondary);color:var(--secondary)}
+.ai-config-box{max-width:380px;width:92%;text-align:left;padding:28px 24px}
+.ai-config-box .ov-title{text-align:center;margin-bottom:6px}
+
+/* ==================== TYPING INDICATOR ==================== */
+.chat-msg.typing{background:var(--surface);border:1px solid var(--border);padding:12px 18px;align-self:flex-start;border-bottom-left-radius:4px}
+.typing-dots{display:flex;gap:4px;align-items:center}
+.typing-dots span{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-muted);animation:typingBounce 1.4s infinite ease-in-out}
+.typing-dots span:nth-child(2){animation-delay:.2s}
+.typing-dots span:nth-child(3){animation-delay:.4s}
+@keyframes typingBounce{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-6px);opacity:1}}
