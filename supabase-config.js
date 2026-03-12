@@ -28,4 +28,21 @@
 const SUPABASE_URL = 'https://lektscrvjhwslrqbywyd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxla3RzY3J2amh3c2xycWJ5d3lkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNDE2ODcsImV4cCI6MjA4ODkxNzY4N30.-5b3ONtRf9hyWUczQpIbddHNv6gWI1GhO1xodW69x9Q';
 
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let supabaseClient;
+try {
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+} catch (e) {
+  console.error('Supabase init failed:', e);
+  // Stub per evitare crash di app.js
+  supabaseClient = {
+    auth: {
+      onAuthStateChange: function() { return { data: { subscription: { unsubscribe: function(){} } } }; },
+      signInWithOAuth: async function() { return { error: { message: 'Supabase non disponibile' } }; },
+      signInWithPassword: async function() { return { error: { message: 'Supabase non disponibile' } }; },
+      signUp: async function() { return { error: { message: 'Supabase non disponibile' } }; },
+      signOut: async function() {},
+      resetPasswordForEmail: async function() { return { error: { message: 'Supabase non disponibile' } }; },
+    },
+    from: function() { return { select: function() { return { eq: function() { return { single: async function() { return {}; } }; } }; } }, upsert: async function() { return {}; } }; }
+  };
+}

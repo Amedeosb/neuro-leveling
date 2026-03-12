@@ -389,7 +389,29 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script>
+    // Verifica che Supabase SDK sia caricato, altrimenti crea un fallback
+    if (!window.supabase) {
+      console.error('Supabase SDK non caricato');
+      document.getElementById('loginScreen').classList.remove('hidden');
+    }
+  </script>
   <script src="supabase-config.js"></script>
   <script src="app.js"></script>
+  <script>
+    // Catch-all: se dopo 3s schermata nera, forza la login screen
+    setTimeout(function() {
+      var ls = document.getElementById('loginScreen');
+      var ma = document.getElementById('mainApp');
+      var ob = document.getElementById('onboarding');
+      var allHidden = (!ls || ls.classList.contains('hidden'))
+        && (!ma || ma.classList.contains('hidden'))
+        && (!ob || ob.classList.contains('hidden'));
+      if (allHidden && ls) {
+        console.warn('Fallback: showing login screen after 3s timeout');
+        ls.classList.remove('hidden');
+      }
+    }, 3000);
+  </script>
 </body>
 </html>
