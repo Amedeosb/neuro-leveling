@@ -3,6 +3,87 @@
    ============================================ */
 
 // ========================
+// AUTH & PERSISTENCE
+// ========================
+
+let currentUser = null;
+let _saveTimeout = null;
+
+function $(id) { return document.getElementById(id); }
+
+// Login con Google
+function googleLogin() {
+  auth.signInWithPopup(googleProvider).catch(err => {
+    console.error('Login error:', err);
+    alert('Errore di login: ' + err.message);
+  });
+}
+
+// Logout
+function logout() {
+  auth.signOut();
+}
+
+// Carica stato da Firestore, con fallback su localStorage
+async function loadStateFromCloud(uid) {
+  try {
+    const doc = await db.collection('players').doc(uid).get();
+    if (doc.exists) {
+      return { ...DEFAULT_STATE, ...doc.data() };
+    }
+    // Migra da localStorage se esiste
+    const local = localStorage.getItem('neuro_leveling_v2');
+    if (local) {
+      const parsed = { ...DEFAULT_STATE, ...JSON.parse(local) };
+      await db.collection('players').doc(uid).set(parsed);
+      return parsed;
+    }
+  } catch (e) {
+    console.error('Firestore load error:', e);
+    // Fallback locale
+    const local = localStorage.getItem('neuro_leveling_v2');
+    if (local) return { ...DEFAULT_STATE, ...JSON.parse(local) };
+  }
+  return { ...DEFAULT_STATE };
+}
+
+// Salva su Firestore + localStorage (debounced)
+function saveState() {
+  localStorage.setItem('neuro_leveling_v2', JSON.stringify(state));
+  if (!currentUser) return;
+  clearTimeout(_saveTimeout);
+  _saveTimeout = setTimeout(() => {
+    db.collection('players').doc(currentUser.uid).set(state)
+      .catch(e => console.error('Firestore save error:', e));
+  }, 1000);
+}
+
+// Auth state listener — entry point dell'app
+auth.onAuthStateChanged(async (user) => {
+  if (user) {
+    currentUser = user;
+    $('loginScreen').classList.add('hidden');
+    // Mostra info utente
+    $('userAvatar').src = user.photoURL || '';
+    $('userEmail').textContent = user.email;
+    // Carica dati dal cloud
+    state = await loadStateFromCloud(user.uid);
+    init();
+  } else {
+    currentUser = null;
+    $('loginScreen').classList.remove('hidden');
+    $('onboarding').classList.add('hidden');
+    $('mainApp').classList.add('hidden');
+  }
+});
+
+// Event listeners login/logout
+document.addEventListener('DOMContentLoaded', () => {
+  $('btnGoogleLogin').addEventListener('click', googleLogin);
+  $('btnLogout').addEventListener('click', logout);
+});
+
+// ========================
 // STAT DEFINITIONS
 // ========================
 
@@ -527,7 +608,7 @@ const DEFAULT_STATE = {
   questTab: 'daily',
 };
 
-let state = loadState();
+let state = { ...DEFAULT_STATE };
 
 function loadState() {
   try {
@@ -536,7 +617,6 @@ function loadState() {
   } catch(_){}
   return { ...DEFAULT_STATE };
 }
-function saveState() { localStorage.setItem('neuro_leveling_v2', JSON.stringify(state)); }
 
 function initStats() {
   if (Object.keys(state.stats).length > 0) return;
@@ -1007,7 +1087,6 @@ function companionReply(msg) {
 // DOM REFERENCES
 // ========================
 
-const $ = id => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
 
 // ========================
@@ -2059,4 +2138,4 @@ function initTimedQuestOverlay() {
   if (cancelBtn) cancelBtn.addEventListener('click', cancelTimedQuest);
 }
 
-init();
+// init() is called by auth.onAuthStateChanged, not directly
