@@ -9,8 +9,13 @@
    5. Vai su Authentication → Providers → abilita Google
       (serve creare credenziali OAuth su Google Cloud Console)
    6. Vai su Authentication → URL Configuration →
-      aggiungi Site URL: https://amedeosb.github.io/neuro-leveling/
-      aggiungi Redirect URL: https://amedeosb.github.io/neuro-leveling/
+      Site URL: https://amedeosb.github.io/neuro-leveling/
+      Redirect URLs consentiti:
+      - https://amedeosb.github.io/neuro-leveling/
+      - http://localhost:4173/
+      - http://localhost:4173/**
+      - https://localhost:4174/
+      - https://localhost:4174/**
    7. Vai su SQL Editor ed esegui questa query:
 
       CREATE TABLE players (
@@ -30,7 +35,8 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    flowType: 'implicit',
-    detectSessionInUrl: false
+    detectSessionInUrl: true,
+    persistSession: true,
+    autoRefreshToken: true
   }
 });

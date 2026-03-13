@@ -8,8 +8,34 @@
 
 let currentUser = null;
 let _saveTimeout = null;
+let _googleLoginPending = false;
+const _domReadyPromise = document.readyState === 'loading'
+  ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+  : Promise.resolve();
 
 function $(id) { return document.getElementById(id); }
+
+function ensureAppVisibility() {
+  const login = $('loginScreen');
+  const onb = $('onboarding');
+  const main = $('mainApp');
+  if (!login || !onb || !main) return;
+
+  const allHidden = login.classList.contains('hidden') && onb.classList.contains('hidden') && main.classList.contains('hidden');
+  if (!allHidden) return;
+
+  if (currentUser) {
+    if (state.onboardingDone) {
+      onb.classList.add('hidden');
+      main.classList.remove('hidden');
+    } else {
+      onb.classList.remove('hidden');
+      main.classList.add('hidden');
+    }
+  } else {
+    login.classList.remove('hidden');
+  }
+}
 
 function showAuthError(msg) {
   const el = $('authError');
@@ -30,13 +56,104 @@ function getSupabaseErrorMessage(msg) {
   return msg;
 }
 
+function getOAuthRedirectUrl() {
+  const { protocol, origin, pathname } = window.location;
+  if (protocol !== 'http:' && protocol !== 'https:') return null;
+
+  const cleanPath = pathname.endsWith('/index.html')
+    ? pathname.slice(0, -'/index.html'.length) || '/'
+    : pathname;
+
+  return origin + cleanPath;
+}
+
+function clearOAuthUrlArtifacts() {
+  const cleanUrl = window.location.origin + window.location.pathname;
+  window.history.replaceState({}, document.title, cleanUrl);
+}
+
+function getOAuthUrlState() {
+  const query = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash);
+
+  return {
+    code: query.get('code'),
+    accessToken: hash.get('access_token'),
+    refreshToken: hash.get('refresh_token'),
+    errorDescription: query.get('error_description') || hash.get('error_description'),
+  };
+}
+
+async function consumeOAuthRedirect() {
+  const { code, accessToken, refreshToken, errorDescription } = getOAuthUrlState();
+
+  if (errorDescription) {
+    clearOAuthUrlArtifacts();
+    showAuthError(decodeURIComponent(errorDescription));
+    return null;
+  }
+
+  if (code) {
+    const { data, error } = await supabaseClient.auth.exchangeCodeForSession(window.location.href);
+    clearOAuthUrlArtifacts();
+    if (error) {
+      console.error('[AUTH] exchangeCodeForSession error:', error);
+      showAuthError(getSupabaseErrorMessage(error.message));
+      return null;
+    }
+    return data?.session?.user || null;
+  }
+
+  if (accessToken && refreshToken) {
+    const { data, error } = await supabaseClient.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    clearOAuthUrlArtifacts();
+    if (error) {
+      console.error('[AUTH] setSession error:', error);
+      showAuthError(getSupabaseErrorMessage(error.message));
+      return null;
+    }
+    return data?.session?.user || null;
+  }
+
+  return null;
+}
+
 // Login con Google
 async function googleLogin() {
-  const { error } = await supabaseClient.auth.signInWithOAuth({
+  if (_googleLoginPending) return;
+  _googleLoginPending = true;
+
+  const redirectTo = getOAuthRedirectUrl();
+  if (!redirectTo) {
+    _googleLoginPending = false;
+    showAuthError('Apri l\'app da server locale o da GitHub Pages. Usa http://localhost:4173 invece di aprire il file direttamente.');
+    return;
+  }
+
+  const { data, error } = await supabaseClient.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin + window.location.pathname }
+    options: {
+      redirectTo,
+      queryParams: {
+        prompt: 'select_account'
+      }
+    }
   });
-  if (error) showAuthError(getSupabaseErrorMessage(error.message));
+  if (error) {
+    _googleLoginPending = false;
+    showAuthError(getSupabaseErrorMessage(error.message));
+    return;
+  }
+
+  if (data?.url) {
+    window.location.assign(data.url);
+    return;
+  }
+
+  _googleLoginPending = false;
 }
 
 // Login con Email/Password
@@ -81,17 +198,20 @@ async function logout() {
   await supabaseClient.auth.signOut();
 }
 
-// Carica stato da Supabase, con fallback su localStorage
+// Carica stato da Supabase (con timeout), con fallback su localStorage
 async function loadStateFromCloud(uid) {
-  // Prova dal cloud
+  // Prova dal cloud con timeout di 5 secondi
   try {
-    const { data, error } = await supabaseClient
+    const cloudPromise = supabaseClient
       .from('players')
       .select('state')
       .eq('id', uid)
       .single();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Cloud load timeout')), 5000)
+    );
+    const { data, error } = await Promise.race([cloudPromise, timeoutPromise]);
     if (!error && data && data.state) {
-      // Successo dal cloud, aggiorna anche localStorage
       const merged = { ...DEFAULT_STATE, ...data.state };
       localStorage.setItem('neuro_leveling_v2', JSON.stringify(merged));
       return merged;
@@ -120,20 +240,53 @@ function saveState() {
 
 // Funzione che gestisce l'ingresso nell'app dopo l'auth
 let _appEntered = false;
+let _initDone = false;
+
+function initOnce() {
+  if (_initDone) return;
+  _initDone = true;
+  init();
+}
+
 async function enterApp(user) {
   if (_appEntered) return;
   _appEntered = true;
   currentUser = user;
-  // Pulisci hash residuo da OAuth
-  if (window.location.hash) {
-    history.replaceState(null, '', window.location.pathname);
-  }
   $('loginScreen').classList.add('hidden');
+
+  // Mostra subito la schermata corretta per evitare il flash nero
+  if (state.onboardingDone) {
+    $('onboarding').classList.add('hidden');
+    $('mainApp').classList.remove('hidden');
+  } else {
+    $('onboarding').classList.remove('hidden');
+    $('mainApp').classList.add('hidden');
+  }
+
   const meta = user.user_metadata || {};
   $('userAvatar').src = meta.avatar_url || meta.picture || '';
   $('userEmail').textContent = user.email || '';
-  state = await loadStateFromCloud(user.id);
+
+  // Inizializza subito la UI con lo stato locale/default.
+  _initDone = false;
   init();
+
+  // Carica dal cloud in background e aggiorna solo quando pronto.
+  try {
+    const cloudState = await loadStateFromCloud(user.id);
+    const localSnapshot = localStorage.getItem('neuro_leveling_v2');
+    const sameAsLocal = localSnapshot && JSON.stringify(cloudState) === JSON.stringify({ ...DEFAULT_STATE, ...JSON.parse(localSnapshot) });
+    state = cloudState;
+    if (!sameAsLocal) {
+      _initDone = false;
+      init();
+    }
+  } catch (e) {
+    console.warn('Cloud load failed, using local state');
+  }
+
+  // Failsafe: evita schermata nera in caso di race condition tra callback auth/UI
+  setTimeout(ensureAppVisibility, 0);
 }
 
 function showLogin() {
@@ -146,72 +299,56 @@ function showLogin() {
   }
 }
 
-// ── GESTIONE MANUALE REDIRECT OAUTH ──
-// Dopo il redirect da Google, l'URL contiene i token nell'hash (#access_token=...)
-// Li prendiamo manualmente e chiamiamo setSession()
-async function handleOAuthTokensFromUrl() {
-  const hash = window.location.hash.substring(1); // rimuovi il #
-  if (!hash) return null;
-  const params = new URLSearchParams(hash);
-  const accessToken = params.get('access_token');
-  const refreshToken = params.get('refresh_token');
-  if (!accessToken || !refreshToken) return null;
-  
-  console.log('[AUTH] Token OAuth trovati nell\'URL, imposto sessione...');
-  // Pulisci l'URL subito
-  history.replaceState(null, '', window.location.pathname);
-  
-  const { data, error } = await supabaseClient.auth.setSession({
-    access_token: accessToken,
-    refresh_token: refreshToken
-  });
-  if (error) {
-    console.error('[AUTH] Errore setSession:', error);
-    return null;
-  }
-  return data?.session?.user || null;
-}
-
-// ── Auth: logica principale ──
-// onAuthStateChange gestisce eventi live (logout, token refresh dopo che l'app è entrata)
+// ── Auth: gestisce solo eventi LIVE (logout, login) ──
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
-  if (document.readyState === 'loading') {
-    await new Promise(r => document.addEventListener('DOMContentLoaded', r));
+  await _domReadyPromise;
+  console.log('[AUTH] event:', event);
+  if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+    _googleLoginPending = false;
   }
-  console.log('[AUTH] event:', event, 'user:', !!session?.user);
-
   if (event === 'SIGNED_OUT') {
     showLogin();
-  } else if (session?.user && !_appEntered) {
-    await enterApp(session.user);
+  } else if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session?.user && !_appEntered) {
+    enterApp(session.user);
   }
 });
 
-// ── Inizializzazione auth su DOMContentLoaded ──
-document.addEventListener('DOMContentLoaded', async () => {
+async function bootstrapAuth() {
   try {
-    // 1. Controlla se siamo tornati da un redirect OAuth con token nell'URL
-    const oauthUser = await handleOAuthTokensFromUrl();
+    const oauthUser = await consumeOAuthRedirect();
     if (oauthUser) {
-      await enterApp(oauthUser);
+      enterApp(oauthUser);
       return;
     }
 
-    // 2. Controlla se c'è già una sessione salvata (refresh della pagina)
-    const { data } = await supabaseClient.auth.getSession();
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+
     if (data?.session?.user) {
-      await enterApp(data.session.user);
-      return;
+      enterApp(data.session.user);
+    } else if (!state.onboardingDone) {
+      showLogin();
     }
-
-    // 3. Nessuna sessione → mostra login (con piccolo delay per onAuthStateChange)
-    setTimeout(() => {
-      if (!_appEntered) showLogin();
-    }, 1000);
   } catch (e) {
-    console.error('[AUTH] Init error:', e);
-    showLogin();
+    console.error('[AUTH] getSession error:', e);
+    if (!state.onboardingDone) showLogin();
+  } finally {
+    setTimeout(ensureAppVisibility, 0);
   }
+}
+
+// ── Inizializzazione su DOMContentLoaded ──
+document.addEventListener('DOMContentLoaded', () => {
+  // 1. SEMPRE init() subito con i dati locali (state è già caricato da loadState())
+  if (state.onboardingDone) {
+    $('loginScreen').classList.add('hidden');
+    $('onboarding').classList.add('hidden');
+    $('mainApp').classList.remove('hidden');
+    initOnce();
+  }
+
+  // 2. Supabase auth check in background (non blocca la UI)
+  bootstrapAuth();
 });
 
 // Event listeners login/logout
@@ -753,7 +890,7 @@ const DEFAULT_STATE = {
   customQuests: [],
 };
 
-let state = { ...DEFAULT_STATE };
+let state = loadState(); // Carica subito da localStorage
 
 // Helper: find quest by ID across built-in + custom
 function findQuestById(id) {
@@ -2705,6 +2842,9 @@ function init() {
     if (state.onboardingDone) {
       $('onboarding').classList.add('hidden');
       $('mainApp').classList.remove('hidden');
+    } else {
+      $('onboarding').classList.remove('hidden');
+      $('mainApp').classList.add('hidden');
     }
   }
 }

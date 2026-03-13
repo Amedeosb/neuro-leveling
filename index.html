@@ -496,8 +496,23 @@
     </div>
   </div>
 
+  <!-- Mostra subito l'app dal localStorage senza aspettare Supabase -->
+  <script>
+  try {
+    var _s = localStorage.getItem('neuro_leveling_v2');
+    if (_s) {
+      var _p = JSON.parse(_s);
+      if (_p && _p.onboardingDone) {
+        document.getElementById('loginScreen').classList.add('hidden');
+        document.getElementById('onboarding').classList.add('hidden');
+        document.getElementById('mainApp').classList.remove('hidden');
+      }
+    }
+  } catch(e) {}
+  </script>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="supabase-config.js?v=10"></script>
-  <script src="app.js?v=10"></script>
+  <script src="supabase-config.js?v=16"></script>
+  <script src="app.js?v=16"></script>
 </body>
 </html>
