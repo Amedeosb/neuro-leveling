@@ -1829,15 +1829,34 @@ let currentQuests = [];
 let questTab = 'corpo';
 
 const QUEST_TAB_DEFS = [
-  { id:'corpo',    label:'💪 CORPO',     filter: q => q.cat === 'PHYSIQUE' },
-  { id:'mente',    label:'🧠 MENTE',     filter: q => q.cat === 'COGNITIVE' || q.cat === 'NEURAL' },
-  { id:'emozioni', label:'💜 EMOZIONI',   filter: q => q.cat === 'SOCIAL' || q.type === 'RECOVERY' },
-  { id:'timed',    label:'⏱ TIMED',      filter: q => !!q.timed },
-  { id:'nontimed', label:'📋 NON TIMED', filter: q => !q.timed },
+  { id:'corpo',    label:'💪 CORPO',      slots: 6, filter: q => q.cat === 'PHYSIQUE' },
+  { id:'mente',    label:'🧠 MENTE',      slots: 6, filter: q => q.cat === 'COGNITIVE' || q.cat === 'NEURAL' },
+  { id:'emozioni', label:'💜 EMOZIONI',   slots: 6, filter: q => q.cat === 'SOCIAL' || q.type === 'RECOVERY' },
+  { id:'timed',    label:'⏱ TIMED',      slots: 5, filter: q => !!q.timed },
+  { id:'nontimed', label:'📋 NON TIMED', slots: 6, filter: q => !q.timed },
+  { id:'completed',label:'✅ COMPLETATE', filter: null },
   { id:'weekly',   label:'WEEKLY',        filter: null },
   { id:'chains',   label:'CHAINS',        filter: null },
   { id:'custom',   label:'CUSTOM',        filter: null },
 ];
+
+function getVisibleDailyQuests(allQuests, tabDef) {
+  const filtered = tabDef?.filter ? allQuests.filter(tabDef.filter) : allQuests;
+  const doneIds = new Set(state.todayCompleted || []);
+  const active = filtered.filter(q => !doneIds.has(q.id));
+  return active.slice(0, tabDef?.slots || active.length);
+}
+
+function getCompletedDailyQuestEntries() {
+  return (state.todayCompletedDetails || [])
+    .map((detail, index) => ({
+      ...detail,
+      quest: findQuestById(detail.id),
+      index,
+    }))
+    .filter(entry => !!entry.quest)
+    .reverse();
+}
 
 function renderQuestTabs() {
   const tabs = $('questTabs');
@@ -1858,6 +1877,7 @@ function renderQuests() {
   const dailyBonus = getDailyBonus();
   const tabDef = QUEST_TAB_DEFS.find(t => t.id === questTab);
   if (tabDef && tabDef.filter) renderDailyQuests(dailyBonus, tabDef.filter);
+  else if (questTab === 'completed') renderCompletedQuests();
   else if (questTab === 'weekly') renderWeeklyQuests();
   else if (questTab === 'custom') renderCustomQuests();
   else renderChainQuests();
@@ -1868,10 +1888,15 @@ function renderQuests() {
 function renderDailyQuests(dailyBonus, filterFn) {
   const lastA = state.assessmentHistory[state.assessmentHistory.length-1] || null;
   let allQuests = getAvailableQuests(lastA);
-  if (filterFn) allQuests = allQuests.filter(filterFn);
-  currentQuests = allQuests;
+  const tabDef = QUEST_TAB_DEFS.find(t => t.id === questTab);
+  currentQuests = getVisibleDailyQuests(allQuests, tabDef);
+  const filteredAllQuests = filterFn ? allQuests.filter(filterFn) : allQuests;
+  const completedRelevant = filteredAllQuests.filter(q => getDoneInfo(q.id));
 
   const listEl = $('questList');
+  if (currentQuests.length === 0) {
+    listEl.innerHTML = `<div class="cq-empty"><div class="cq-empty-icon">✅</div><p>Nessuna quest attiva in questa tab. Completa l'assessment successivo o consulta la tab completate.</p></div>`;
+  } else {
   listEl.innerHTML = currentQuests.map(q => {
     const rank = getRank(q.diff);
     const rarity = getQuestRarity(q.diff);
@@ -1921,9 +1946,10 @@ function renderDailyQuests(dailyBonus, filterFn) {
         <div class="q-rank rk-${rank}">${rank}</div>
       </div>`;
   }).join('');
+  }
 
-  const total = currentQuests.length;
-  const done = currentQuests.filter(q => getDoneInfo(q.id)).length;
+  const total = currentQuests.length + completedRelevant.length;
+  const done = completedRelevant.length;
   const pct = total > 0 ? Math.round((done/total)*100) : 0;
   $('qpFill').style.width = pct+'%';
   $('qpText').textContent = `${done} / ${total}`;
@@ -1953,6 +1979,52 @@ function renderDailyQuests(dailyBonus, filterFn) {
       if (p) p.classList.toggle('open');
     });
   });
+}
+
+function renderCompletedQuests() {
+  const entries = getCompletedDailyQuestEntries();
+  currentQuests = entries.map(entry => entry.quest);
+
+  const listEl = $('questList');
+  if (entries.length === 0) {
+    listEl.innerHTML = `<div class="cq-empty"><div class="cq-empty-icon">🗂</div><p>Nessuna quest completata oggi.</p></div>`;
+  } else {
+    listEl.innerHTML = entries.map(entry => {
+      const q = entry.quest;
+      const modeInfo = DIFFICULTY_MODES[entry.mode || 'medium'];
+      const earnedXp = entry.earnedXp ?? q.rewards.reduce((acc, rew) => acc + rew.xp, 0);
+      const timeLbl = q.timed && entry.timeBonus && entry.timeBonus !== 1 ? ` · ⏱ x${entry.timeBonus.toFixed(2)}` : '';
+      return `
+        <div class="quest-card done rarity-border-${getQuestRarity(q.diff).toLowerCase()}" data-quest-id="${q.id}" data-cat="${q.cat}">
+          <div class="q-check">✓</div>
+          <span class="q-icon">${q.icon}</span>
+          <div class="q-body">
+            <div class="q-name">${q.name} <span class="done-mode-badge" style="color:${modeInfo.color}">${modeInfo.icon} ${modeInfo.label}</span></div>
+            <div class="q-tags"><span class="q-cat-tag">${q.cat}</span><span class="timed-tag">COMPLETATA</span></div>
+            <div class="q-desc">${q.desc}</div>
+            <div class="q-meta"><span class="q-dur">${q.dur} min${timeLbl}</span><span class="q-xp">+${earnedXp} XP</span></div>
+            <div class="q-detail" id="detail-completed-${entry.index}">
+              <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
+              <div class="q-sci">${q.science}</div>
+            </div>
+          </div>
+          <div class="q-rank rk-${getRank(q.diff)}">✓</div>
+        </div>`;
+    }).join('');
+
+    listEl.querySelectorAll('.quest-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const detail = card.querySelector('.q-detail');
+        if (detail) detail.classList.toggle('open');
+      });
+    });
+  }
+
+  const total = entries.length;
+  $('qpFill').style.width = total > 0 ? '100%' : '0%';
+  $('qpText').textContent = `${total} completate oggi`;
+  const totalXP = entries.reduce((sum, entry) => sum + (entry.earnedXp ?? entry.quest.rewards.reduce((acc, rew) => acc + rew.xp, 0)), 0);
+  $('totalRewXp').textContent = `${totalXP} XP ottenuti`;
 }
 
 function getDoneInfo(qid) {
@@ -2193,7 +2265,7 @@ function completeQuest(quest, mode, timeBonus) {
   state.questsCompleted++;
   state.todayCompleted.push(quest.id);
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
-  state.todayCompletedDetails.push({ id:quest.id, mode, timeBonus });
+  state.todayCompletedDetails.push({ id:quest.id, mode, timeBonus, earnedXp: totalG, completedAt: Date.now() });
 
   // Faction rep
   addFactionRep(quest.cat, Math.round(10 * rarityMult * modeInfo.xpMult));
