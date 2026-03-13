@@ -147,6 +147,34 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 /* Section labels */
 .section-label{font-family:var(--font-d);font-size:.85rem;font-weight:700;letter-spacing:2px;color:var(--text-muted);margin:18px 0 10px;border-bottom:1px solid var(--border);padding-bottom:6px}
 
+/* ==================== GEAR ==================== */
+.gear-power-card{padding:18px 16px;border-radius:14px;border:1px solid rgba(0,212,255,.18);background:linear-gradient(145deg,rgba(0,212,255,.12),rgba(21,21,48,.88));box-shadow:inset 0 0 0 1px rgba(255,255,255,.02);margin-bottom:18px}
+.gear-power-label{font-family:var(--font-m);font-size:.74rem;letter-spacing:2px;color:var(--text-muted);margin-bottom:6px}
+.gear-power-value{font-family:var(--font-d);font-size:2rem;font-weight:900;color:var(--primary);text-shadow:0 0 18px rgba(0,212,255,.35)}
+.gear-power-desc{font-size:.86rem;color:var(--text-dim);line-height:1.45}
+.gear-slots-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.gear-slot-card{padding:14px;border-radius:12px;border:1px solid var(--border);background:rgba(255,255,255,.03);min-height:132px}
+.gear-slot-label{font-family:var(--font-m);font-size:.7rem;letter-spacing:2px;color:var(--text-muted);margin-bottom:10px}
+.gear-slot-empty{height:100%;display:flex;align-items:center;justify-content:center;border:1px dashed rgba(255,255,255,.12);border-radius:10px;color:var(--text-muted);font-family:var(--font-m);font-size:.75rem;text-align:center;padding:12px}
+.gear-item-name{font-family:var(--font-d);font-size:.88rem;font-weight:700;letter-spacing:1px;color:var(--text)}
+.gear-item-rarity{display:inline-block;padding:2px 7px;border-radius:999px;font-family:var(--font-m);font-size:.62rem;letter-spacing:1px;margin:6px 0}
+.gear-rarity-rare{background:rgba(51,187,255,.12);color:#33BBFF}
+.gear-rarity-epic{background:rgba(144,80,255,.14);color:#B88CFF}
+.gear-rarity-legendary{background:rgba(255,215,0,.15);color:#FFD700}
+.gear-item-desc{font-size:.82rem;color:var(--text-dim);line-height:1.45;margin-bottom:8px}
+.gear-item-bonuses{display:flex;flex-wrap:wrap;gap:6px}
+.gear-bonus-pill{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.18);font-family:var(--font-m);font-size:.68rem;color:var(--primary)}
+.gear-inventory-list{display:flex;flex-direction:column;gap:10px}
+.gear-card{padding:14px;border-radius:12px;border:1px solid var(--border);background:rgba(255,255,255,.03)}
+.gear-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}
+.gear-card-meta{display:flex;flex-direction:column}
+.gear-card-slot{font-family:var(--font-m);font-size:.68rem;letter-spacing:2px;color:var(--text-muted)}
+.gear-card-actions{display:flex;gap:8px;margin-top:12px}
+.gear-card-actions .btn-primary,.gear-card-actions .btn-secondary{flex:1;padding:10px 12px;font-size:.74rem}
+.gear-equipped-tag{font-family:var(--font-m);font-size:.68rem;color:var(--success);letter-spacing:1px}
+.gear-empty-state{text-align:center;padding:28px 16px;border:1px dashed rgba(255,255,255,.12);border-radius:12px;color:var(--text-muted);font-family:var(--font-m)}
+.stat-bonus-chip{display:inline-flex;align-items:center;justify-content:center;min-width:34px;margin-left:8px;padding:1px 6px;border-radius:999px;background:rgba(0,212,255,.12);border:1px solid rgba(0,212,255,.2);font-family:var(--font-m);font-size:.65rem;color:var(--primary)}
+
 /* Stats list */
 .stats-list{display:flex;flex-direction:column;gap:10px}
 .stat-row{display:flex;align-items:center;gap:10px}
@@ -310,6 +338,12 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 @media (max-width: 640px){
   .system-popup-layer{left:12px;right:12px;width:auto}
   .screen-content{padding:18px 14px calc(16px + var(--safe-b))}
+}
+
+@media (max-width: 420px){
+  .nav-btn{padding:8px 6px}
+  .nav-btn span{font-size:.55rem;letter-spacing:.6px}
+  .gear-slots-grid{grid-template-columns:1fr}
 }
 
 /* ==================== OVERLAYS ==================== */

@@ -881,6 +881,83 @@ const BUFF_CATALOG = {
   STAT_CRYSTAL:  { name:'Cristallo Stat',  icon:'✨', desc:'+15 XP stat random',  durType:'instant', effect:'instantXP', value:15 },
 };
 
+const EQUIPMENT_SLOT_LABELS = {
+  WEAPON: 'ARMA',
+  HEAD: 'ELMO',
+  CHEST: 'TORSO',
+  ACCESSORY: 'ACCESSORIO',
+};
+
+const EQUIPMENT_CATALOG = {
+  SHADOW_DAGGER: {
+    id: 'SHADOW_DAGGER',
+    slot: 'WEAPON',
+    name: 'Shadow Dagger',
+    icon: '🗡️',
+    rarity: 'EPIC',
+    desc: 'Lama ottenuta nella prova d\'ombra. Amplifica precisione e volonta in combattimento.',
+    bonuses: { AGI: 2, WIL: 1 },
+  },
+  MONARCH_VISOR: {
+    id: 'MONARCH_VISOR',
+    slot: 'HEAD',
+    name: 'Monarch Visor',
+    icon: '👁',
+    rarity: 'LEGENDARY',
+    desc: 'Visore tattico per leggere pattern e priorita del sistema in tempo reale.',
+    bonuses: { INT: 2, FOC: 1 },
+  },
+  IRON_HEART_ARMOR: {
+    id: 'IRON_HEART_ARMOR',
+    slot: 'CHEST',
+    name: 'Iron Heart Armor',
+    icon: '🛡️',
+    rarity: 'EPIC',
+    desc: 'Corazza da training che stabilizza il sistema sotto carico e migliora la tenuta.',
+    bonuses: { RES: 2, STR: 1 },
+  },
+  VAGAL_SIGIL: {
+    id: 'VAGAL_SIGIL',
+    slot: 'ACCESSORY',
+    name: 'Vagal Sigil',
+    icon: '🔷',
+    rarity: 'RARE',
+    desc: 'Sigillo di regolazione che migliora calma, empatia e recupero.',
+    bonuses: { VAG: 2, CHA: 1 },
+  },
+};
+
+const SPECIAL_QUESTS = [
+  {
+    id:'shadow_trial', name:'Trial of the Shadow Blade', desc:'Missione speciale per ottenere un\'arma d\'ombra e affinare l\'agilita operativa.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:8, dur:35, req:[{ stat:'AGI', minLv:4 },{ stat:'WIL', minLv:4 }], timed:true,
+    rewards:[{ stat:'AGI', xp:70 },{ stat:'WIL', xp:40 }],
+    protocol:['Riscaldamento rapido 5 min','20 min di footwork o sprint tecnici','5 min di coordinazione fine sotto fatica','Debrief scritto: 3 errori, 3 correzioni'],
+    science:'Le prove motorie sotto stress consolidano controllo, time pressure e adattabilita neurale.', icon:'🗡️', equipmentId:'SHADOW_DAGGER'
+  },
+  {
+    id:'visor_protocol', name:'Monarch Vision Protocol', desc:'Quest speciale cognitiva per ottenere il visore del monarca.',
+    type:'SPECIAL', cat:'COGNITIVE', diff:8, dur:45, req:[{ stat:'INT', minLv:5 },{ stat:'FOC', minLv:4 }], timed:true,
+    rewards:[{ stat:'INT', xp:75 },{ stat:'FOC', xp:45 }],
+    protocol:['Blocca 45 min di deep work','Risolve un problema ad alta complessita','Annota 5 pattern ricorrenti','Chiudi con 3 decisioni operative nette'],
+    science:'Il lavoro cognitivo prolungato migliora filtro attentivo e riconoscimento di pattern ad alto livello.', icon:'👁', equipmentId:'MONARCH_VISOR'
+  },
+  {
+    id:'iron_heart_forge', name:'Forge of Iron Heart', desc:'Quest speciale fisica per sbloccare una corazza che aumenta la tenuta.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:9, dur:50, req:[{ stat:'STR', minLv:5 },{ stat:'RES', minLv:5 }], timed:true,
+    rewards:[{ stat:'STR', xp:80 },{ stat:'RES', xp:50 }],
+    protocol:['Circuito forza-resistenza 30 min','Carry o plank isometrici finali','Respirazione diaframmatica 5 min','Log del livello di sforzo'],
+    science:'Le prove miste forza-resistenza aumentano resilienza periferica e tolleranza al carico.', icon:'🛡️', equipmentId:'IRON_HEART_ARMOR'
+  },
+  {
+    id:'vagal_relic', name:'Relic of Calm Signal', desc:'Quest speciale di recupero per ottenere un accessorio di regolazione nervosa.',
+    type:'SPECIAL', cat:'SOCIAL', diff:7, dur:25, req:[{ stat:'VAG', minLv:4 },{ stat:'CHA', minLv:3 }], timed:false,
+    rewards:[{ stat:'VAG', xp:65 },{ stat:'CHA', xp:35 }],
+    protocol:['10 min box breathing','2 min cold splash viso','1 contatto sociale consapevole','2 min journaling sulla regolazione'],
+    science:'La combinazione di respiro, vagal tone e co-regolazione migliora flessibilita autonomica.', icon:'🔷', equipmentId:'VAGAL_SIGIL'
+  },
+];
+
 // ========================
 // FACTIONS
 // ========================
@@ -955,13 +1032,18 @@ const DEFAULT_STATE = {
   todayCompletedDetails: [],
   questTab: 'corpo',
   customQuests: [],
+  ownedEquipment: [],
+  equippedGear: { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null },
+  specialQuestCompleted: [],
 };
 
 let state = loadState(); // Carica subito da localStorage
 
 // Helper: find quest by ID across built-in + custom
 function findQuestById(id) {
-  return QUEST_DEFINITIONS.find(q => q.id === id) || (state.customQuests || []).find(q => q.id === id);
+  return QUEST_DEFINITIONS.find(q => q.id === id)
+    || SPECIAL_QUESTS.find(q => q.id === id)
+    || (state.customQuests || []).find(q => q.id === id);
 }
 
 function loadState() {
@@ -982,6 +1064,19 @@ function initStats() {
 function xpForLevel(lv) { return Math.floor(100 * Math.pow(lv, 1.5)); }
 
 function getStatLv(id) { return state.stats[id]?.lv ?? 1; }
+
+function getEquipmentBonusForStat(statId) {
+  const equipped = state.equippedGear || {};
+  return Object.values(equipped).reduce((sum, itemId) => {
+    if (!itemId) return sum;
+    const item = EQUIPMENT_CATALOG[itemId];
+    return sum + (item?.bonuses?.[statId] || 0);
+  }, 0);
+}
+
+function getEffectiveStatLv(id) {
+  return getStatLv(id) + getEquipmentBonusForStat(id);
+}
 
 function addStatXP(id, amount) {
   if (!state.stats[id]) state.stats[id] = { lv:1, xp:0 };
@@ -1026,7 +1121,53 @@ function getDebuffPenalty(statId) {
 }
 
 function meetsReq(reqs) {
-  return reqs.every(r => getStatLv(r.stat) >= r.minLv);
+  return reqs.every(r => getEffectiveStatLv(r.stat) >= r.minLv);
+}
+
+function getOwnedEquipmentItems() {
+  return (state.ownedEquipment || []).map(id => EQUIPMENT_CATALOG[id]).filter(Boolean);
+}
+
+function getEquippedItem(slot) {
+  const itemId = state.equippedGear?.[slot];
+  return itemId ? EQUIPMENT_CATALOG[itemId] : null;
+}
+
+function equipItem(itemId) {
+  const item = EQUIPMENT_CATALOG[itemId];
+  if (!item) return;
+  if (!state.ownedEquipment?.includes(itemId)) return;
+  if (!state.equippedGear) state.equippedGear = { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null };
+  state.equippedGear[item.slot] = itemId;
+  saveState();
+  renderGear();
+  renderStatus();
+  showToast(`${item.icon} ${item.name} equipaggiato`, 'success');
+}
+
+function unequipItem(slot) {
+  if (!state.equippedGear?.[slot]) return;
+  state.equippedGear[slot] = null;
+  saveState();
+  renderGear();
+  renderStatus();
+}
+
+function awardEquipment(itemId) {
+  const item = EQUIPMENT_CATALOG[itemId];
+  if (!item) return;
+  if (!state.ownedEquipment) state.ownedEquipment = [];
+  if (state.ownedEquipment.includes(itemId)) return;
+  state.ownedEquipment.push(itemId);
+  if (!state.equippedGear) state.equippedGear = { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null };
+  if (!state.equippedGear[item.slot]) state.equippedGear[item.slot] = itemId;
+  showToast(`${item.icon} Equip ottenuto: ${item.name}`, 'levelup');
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'GEAR',
+    title: 'EQUIPAGGIAMENTO OTTENUTO',
+    body: `${item.name} acquisito. Bonus: ${Object.entries(item.bonuses).map(([stat,val]) => `+${val} ${stat}`).join(' · ')}.`,
+  });
 }
 
 // ========================
@@ -1323,7 +1464,11 @@ function isForcedRest() {
 // ========================
 
 function getAvailableQuests(assessment) {
-  const allQuests = [...QUEST_DEFINITIONS, ...(state.customQuests || [])];
+  const allQuests = [
+    ...QUEST_DEFINITIONS,
+    ...SPECIAL_QUESTS.filter(q => !(state.specialQuestCompleted || []).includes(q.id)),
+    ...(state.customQuests || []),
+  ];
   const rest = isForcedRest();
   if (rest) return allQuests.filter(q=>q.type==='RECOVERY');
   return allQuests.filter(q => {
@@ -1695,6 +1840,7 @@ function switchScreen(name) {
   if (name==='status') renderStatus();
   else if (name==='quests') renderQuests();
   else if (name==='boss') renderBossGrid();
+  else if (name==='gear') renderGear();
 
   setTimeout(() => {
     syncAppChromeMetrics();
@@ -1868,13 +2014,15 @@ function renderStatus() {
   const priEl = $('statsPrimary');
   priEl.innerHTML = PRIMARY_STATS.map(s => {
     const lv = getStatLv(s.id);
+    const bonus = getEquipmentBonusForStat(s.id);
+    const shownLv = lv + bonus;
     const xpN = xpForLevel(lv+1);
     const xpC = state.stats[s.id]?.xp ?? 0;
     const pct = Math.min((xpC/Math.max(xpN,1))*100, 100);
     return `<div class="stat-row">
       <div class="stat-icon">${s.icon}</div>
       <div class="stat-info">
-        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${lv}</span></div>
+        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${shownLv}${bonus ? ` (+${bonus})` : ''}</span></div>
         <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%;background:${s.color}"></div></div>
       </div>
     </div>`;
@@ -1884,13 +2032,15 @@ function renderStatus() {
   const secEl = $('statsSecondary');
   secEl.innerHTML = SECONDARY_STATS.map(s => {
     const lv = getStatLv(s.id);
+    const bonus = getEquipmentBonusForStat(s.id);
+    const shownLv = lv + bonus;
     const xpN = xpForLevel(lv+1);
     const xpC = state.stats[s.id]?.xp ?? 0;
     const pct = Math.min((xpC/Math.max(xpN,1))*100, 100);
     return `<div class="stat-row">
       <div class="stat-icon">${s.icon}</div>
       <div class="stat-info">
-        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${lv}</span></div>
+        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${shownLv}${bonus ? ` (+${bonus})` : ''}</span></div>
         <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%;background:${s.color}"></div></div>
       </div>
     </div>`;
@@ -1965,6 +2115,7 @@ const QUEST_TAB_DEFS = [
   { id:'corpo',    label:'💪 CORPO',      slots: 6, filter: q => q.cat === 'PHYSIQUE' },
   { id:'mente',    label:'🧠 MENTE',      slots: 6, filter: q => q.cat === 'COGNITIVE' || q.cat === 'NEURAL' },
   { id:'emozioni', label:'💜 EMOZIONI',   slots: 6, filter: q => q.cat === 'SOCIAL' || q.type === 'RECOVERY' },
+  { id:'special',  label:'✦ SPECIAL',    slots: 4, filter: q => q.type === 'SPECIAL' },
   { id:'timed',    label:'⏱ TIMED',      slots: 5, filter: q => !!q.timed },
   { id:'nontimed', label:'📋 NON TIMED', slots: 6, filter: q => !q.timed },
   { id:'completed',label:'✅ COMPLETATE', filter: null },
@@ -2044,6 +2195,7 @@ function renderDailyQuests(dailyBonus, filterFn) {
     const rarityTag = `<span class="rarity-badge rarity-${rarity.toLowerCase()}">${RARITY_LABELS[rarity]}</span>`;
     const timedTag = q.timed ? '<span class="timed-tag">⏱ TIMED</span>' : '';
     const doneModeBadge = doneInfo?.mode ? `<span class="done-mode-badge" style="color:${DIFFICULTY_MODES[doneInfo.mode].color}">${DIFFICULTY_MODES[doneInfo.mode].icon} ${DIFFICULTY_MODES[doneInfo.mode].label}</span>` : '';
+    const gearTag = q.equipmentId ? `<span class="daily-bonus-tag">${EQUIPMENT_CATALOG[q.equipmentId]?.icon || '🎁'} GEAR</span>` : '';
 
     // XP preview for each mode (matches completeQuest formula)
     const xpPreview = !done && !locked ? `<div class="diff-mode-selector" data-qid="${q.id}">
@@ -2067,7 +2219,7 @@ function renderDailyQuests(dailyBonus, filterFn) {
         <div class="q-check">${done ? '✓' : (locked ? '🔒' : '')}</div>
         <span class="q-icon">${q.icon}</span>
         <div class="q-body">
-          <div class="q-name">${q.name} ${bonusTag} ${timedTag} ${doneModeBadge}</div>
+          <div class="q-name">${q.name} ${bonusTag} ${gearTag} ${timedTag} ${doneModeBadge}</div>
           <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
           <div class="q-desc">${q.desc}</div>
           <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
@@ -2128,12 +2280,13 @@ function renderCompletedQuests() {
       const modeInfo = DIFFICULTY_MODES[entry.mode || 'medium'];
       const earnedXp = entry.earnedXp ?? q.rewards.reduce((acc, rew) => acc + rew.xp, 0);
       const timeLbl = q.timed && entry.timeBonus && entry.timeBonus !== 1 ? ` · ⏱ x${entry.timeBonus.toFixed(2)}` : '';
+      const gearTag = q.equipmentId ? `<span class="daily-bonus-tag">${EQUIPMENT_CATALOG[q.equipmentId]?.icon || '🎁'} GEAR</span>` : '';
       return `
         <div class="quest-card done rarity-border-${getQuestRarity(q.diff).toLowerCase()}" data-quest-id="${q.id}" data-cat="${q.cat}">
           <div class="q-check">✓</div>
           <span class="q-icon">${q.icon}</span>
           <div class="q-body">
-            <div class="q-name">${q.name} <span class="done-mode-badge" style="color:${modeInfo.color}">${modeInfo.icon} ${modeInfo.label}</span></div>
+            <div class="q-name">${q.name} ${gearTag} <span class="done-mode-badge" style="color:${modeInfo.color}">${modeInfo.icon} ${modeInfo.label}</span></div>
             <div class="q-tags"><span class="q-cat-tag">${q.cat}</span><span class="timed-tag">COMPLETATA</span></div>
             <div class="q-desc">${q.desc}</div>
             <div class="q-meta"><span class="q-dur">${q.dur} min${timeLbl}</span><span class="q-xp">+${earnedXp} XP</span></div>
@@ -2400,6 +2553,11 @@ function completeQuest(quest, mode, timeBonus) {
   state.todayCompleted.push(quest.id);
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
   state.todayCompletedDetails.push({ id:quest.id, mode, timeBonus, earnedXp: totalG, completedAt: Date.now() });
+  if (quest.type === 'SPECIAL') {
+    if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
+    if (!state.specialQuestCompleted.includes(quest.id)) state.specialQuestCompleted.push(quest.id);
+    if (quest.equipmentId) awardEquipment(quest.equipmentId);
+  }
 
   // Faction rep
   addFactionRep(quest.cat, Math.round(10 * rarityMult * modeInfo.xpMult));
@@ -2457,6 +2615,72 @@ function completeQuest(quest, mode, timeBonus) {
     title: 'QUEST CLEAR',
     body: 'Quest completata. Il Quest Board ha gia allocato la prossima missione disponibile.',
   });
+}
+
+function getTotalGearPower() {
+  return Object.keys(STAT_META).reduce((sum, statId) => sum + getEquipmentBonusForStat(statId), 0);
+}
+
+function renderGear() {
+  const powerEl = $('gearPowerValue');
+  const descEl = $('gearPowerDesc');
+  const slotsEl = $('gearSlotsGrid');
+  const inventoryEl = $('gearInventoryList');
+  if (!powerEl || !descEl || !slotsEl || !inventoryEl) return;
+
+  const totalPower = getTotalGearPower();
+  powerEl.textContent = `+${totalPower}`;
+  descEl.textContent = totalPower
+    ? 'I bonus gear sono gia applicati ai requisiti e ai livelli mostrati.'
+    : 'Completa le quest speciali per sbloccare equipaggiamento e potenziare il profilo.';
+
+  const slotOrder = ['WEAPON','HEAD','CHEST','ACCESSORY'];
+  slotsEl.innerHTML = slotOrder.map(slot => {
+    const item = getEquippedItem(slot);
+    const bonuses = item
+      ? Object.entries(item.bonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('')
+      : '';
+    return `
+      <div class="gear-slot-card ${item ? 'equipped' : 'empty'}">
+        <div class="small muted">${EQUIPMENT_SLOT_LABELS[slot]}</div>
+        ${item ? `
+          <div class="gear-item-head">
+            <div class="gear-item-icon">${item.icon}</div>
+            <div>
+              <div class="gear-item-name">${item.name}</div>
+              <div class="gear-item-rarity">${item.rarity}</div>
+            </div>
+          </div>
+          <div class="gear-item-desc">${item.desc}</div>
+          <div class="gear-item-bonuses">${bonuses}</div>
+          <button class="btn ghost" data-unequip-slot="${slot}">Rimuovi</button>` : `
+          <div class="gear-empty-state">Slot vuoto. Le missioni speciali lo riempiranno.</div>`}
+      </div>`;
+  }).join('');
+
+  const owned = getOwnedEquipmentItems();
+  inventoryEl.innerHTML = owned.length ? owned.map(item => {
+    const equipped = state.equippedGear?.[item.slot] === item.id;
+    const bonuses = Object.entries(item.bonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('');
+    return `
+      <div class="gear-card ${equipped ? 'equipped' : ''}">
+        <div class="gear-card-top">
+          <div class="gear-item-head">
+            <div class="gear-item-icon">${item.icon}</div>
+            <div>
+              <div class="gear-item-name">${item.name}</div>
+              <div class="gear-item-rarity">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
+            </div>
+          </div>
+          <div class="gear-item-bonuses">${bonuses}</div>
+        </div>
+        <div class="gear-item-desc">${item.desc}</div>
+        <button class="btn ${equipped ? 'ghost' : ''}" data-equip-item="${item.id}">${equipped ? 'Equipaggiato' : 'Equipaggia'}</button>
+      </div>`;
+  }).join('') : '<div class="gear-empty-state">Nessun equip ottenuto. Raggiungi i requisiti delle missioni speciali per sbloccarlo.</div>';
+
+  slotsEl.querySelectorAll('[data-unequip-slot]').forEach(btn => btn.addEventListener('click', () => unequipItem(btn.dataset.unequipSlot)));
+  inventoryEl.querySelectorAll('[data-equip-item]').forEach(btn => btn.addEventListener('click', () => equipItem(btn.dataset.equipItem)));
 }
 
 function completeWeeklyQuest(wq) {
@@ -3153,6 +3377,9 @@ function init() {
   if (state.criticalHits == null) state.criticalHits = 0;
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
   if (!state.customQuests)     state.customQuests = [];
+  if (!state.ownedEquipment)   state.ownedEquipment = [];
+  if (!state.equippedGear)     state.equippedGear = { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null };
+  if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
 
   initStats();
   resetWeeklyIfNeeded();
@@ -3164,6 +3391,7 @@ function init() {
   initTimedQuestOverlay();
   if (state.onboardingDone) {
     renderStatus();
+    renderGear();
     checkAchievements();
   }
   } catch (e) {
