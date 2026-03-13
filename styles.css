@@ -5,7 +5,7 @@
   --physique:#FF55BB; --neural:#33BBFF; --cognitive:#00FFCC; --social:#BB77FF;
   --text:#F0F0FF; --text-dim:#B0B0D8; --text-muted:#7878A8; --border:#303068;
   --font-d:'Orbitron',monospace; --font-b:'Rajdhani',sans-serif; --font-m:'Share Tech Mono',monospace;
-  --nav:64px; --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  --nav:64px; --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px); --chrome-top:0px; --chrome-bottom:64px;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:18px;-webkit-text-size-adjust:100%}
@@ -53,7 +53,8 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .login-footer{font-size:.8rem;color:var(--text-muted);margin-top:20px;opacity:.6}
 
 /* ==================== USER BAR ==================== */
-.user-bar{display:flex;align-items:center;gap:10px;padding:calc(8px + var(--safe-t)) 16px 8px;background:var(--surface);border-bottom:1px solid var(--border)}
+.app{position:relative}
+.user-bar{position:fixed;top:0;left:0;right:0;z-index:9001;display:flex;align-items:center;gap:10px;padding:calc(8px + var(--safe-t)) 16px 8px;background:rgba(21,21,48,.92);border-bottom:1px solid var(--border);backdrop-filter:blur(14px)}
 .user-avatar{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);object-fit:cover}
 .user-email{flex:1;font-family:var(--font-m);font-size:.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn-logout{background:none;border:1px solid var(--border);color:var(--text-muted);font-size:1rem;padding:4px 10px;border-radius:6px;cursor:pointer;transition:all .2s}
@@ -121,10 +122,10 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 
 /* ==================== SCREENS ==================== */
 .app.hidden{display:none}
-.screen{display:none;position:fixed;inset:0;bottom:var(--nav);overflow-y:auto;-webkit-overflow-scrolling:touch}
+.screen{display:none;position:fixed;top:var(--chrome-top);left:0;right:0;bottom:var(--chrome-bottom);overflow-y:auto;-webkit-overflow-scrolling:touch}
 .screen.active{display:block;animation:sIn .25s ease-out}
 @keyframes sIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.screen-content{padding:calc(20px + var(--safe-t)) 16px calc(16px + var(--safe-b));max-width:480px;margin:0 auto}
+.screen-content{padding:20px 16px calc(16px + var(--safe-b));max-width:480px;margin:0 auto}
 .screen-title{font-family:var(--font-d);font-size:1.4rem;font-weight:800;letter-spacing:2px;margin-bottom:4px}
 .screen-sub{font-family:var(--font-m);font-size:.85rem;color:var(--text-muted);letter-spacing:2px;margin-bottom:16px}
 
@@ -279,7 +280,7 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .assess-debuffs{margin-bottom:14px}
 
 /* ==================== TOASTS ==================== */
-.toast-container{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;display:flex;flex-direction:column;gap:6px;width:92%;max-width:400px;pointer-events:none}
+.toast-container{position:fixed;top:calc(var(--chrome-top) + 12px);left:50%;transform:translateX(-50%);z-index:10000;display:flex;flex-direction:column;gap:6px;width:92%;max-width:400px;pointer-events:none}
 .toast{padding:12px 16px;border-radius:6px;font-family:var(--font-m);font-size:.85rem;backdrop-filter:blur(10px);pointer-events:auto;animation:tIn .3s ease-out,tOut .3s ease-in 2.7s forwards}
 .toast-success{background:rgba(0,255,136,.15);border:1px solid var(--success);color:var(--success)}
 .toast-xp{background:rgba(255,184,0,.15);border:1px solid var(--warning);color:var(--warning)}
@@ -287,6 +288,29 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .toast-alert{background:rgba(255,51,102,.15);border:1px solid var(--accent);color:var(--accent)}
 @keyframes tIn{from{opacity:0;transform:translateY(-16px)}to{opacity:1;transform:none}}
 @keyframes tOut{to{opacity:0;transform:translateY(-8px)}}
+
+/* ==================== SYSTEM POPUPS ==================== */
+.system-popup-layer{position:fixed;top:calc(var(--chrome-top) + 12px);right:12px;z-index:10002;display:flex;flex-direction:column;gap:10px;width:min(88vw,340px);pointer-events:none}
+.system-popup{position:relative;padding:14px 14px 12px 16px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,rgba(21,21,48,.96),rgba(10,10,20,.94));box-shadow:0 18px 36px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.02);overflow:hidden;pointer-events:auto;animation:sysIn .35s cubic-bezier(.22,1,.36,1),sysOut .35s ease-in 6.85s forwards}
+.system-popup::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--primary);box-shadow:0 0 18px currentColor}
+.system-popup.info::before{background:var(--primary)}
+.system-popup.warning::before{background:var(--accent)}
+.system-popup.reward::before{background:var(--warning)}
+.system-popup-header{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}
+.system-popup-badge{flex:0 0 auto;padding:3px 7px;border-radius:999px;border:1px solid currentColor;font-family:var(--font-m);font-size:.62rem;letter-spacing:1px;color:inherit;opacity:.9}
+.system-popup.info{color:var(--primary)}
+.system-popup.warning{color:var(--accent)}
+.system-popup.reward{color:var(--warning)}
+.system-popup-title{font-family:var(--font-d);font-size:.9rem;font-weight:800;letter-spacing:1.4px;line-height:1.2}
+.system-popup-body{font-family:var(--font-m);font-size:.78rem;line-height:1.55;color:var(--text-dim)}
+.system-popup-close{position:absolute;top:10px;right:10px;width:26px;height:26px;border:1px solid rgba(255,255,255,.1);border-radius:50%;background:rgba(255,255,255,.03);color:var(--text-muted);cursor:pointer}
+@keyframes sysIn{from{opacity:0;transform:translateY(-14px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes sysOut{to{opacity:0;transform:translateY(-8px) scale(.98)}}
+
+@media (max-width: 640px){
+  .system-popup-layer{left:12px;right:12px;width:auto}
+  .screen-content{padding:18px 14px calc(16px + var(--safe-b))}
+}
 
 /* ==================== OVERLAYS ==================== */
 .overlay{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85);backdrop-filter:blur(6px)}

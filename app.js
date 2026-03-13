@@ -10,11 +10,22 @@ let currentUser = null;
 let _saveTimeout = null;
 let _googleLoginPending = false;
 const STORAGE_KEY = 'neuro_leveling_v2';
+let currentScreen = 'status';
+let _systemPopupInterval = null;
+let _lastSystemPopupAt = 0;
 const _domReadyPromise = document.readyState === 'loading'
   ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
   : Promise.resolve();
 
 function $(id) { return document.getElementById(id); }
+
+function syncAppChromeMetrics() {
+  const root = document.documentElement;
+  const userBar = $('userBar');
+  const navBar = document.querySelector('.nav-bar');
+  root.style.setProperty('--chrome-top', `${userBar ? userBar.offsetHeight : 0}px`);
+  root.style.setProperty('--chrome-bottom', `${navBar ? navBar.offsetHeight : 64}px`);
+}
 
 function ensureAppVisibility() {
   const login = $('loginScreen');
@@ -310,6 +321,7 @@ async function enterApp(user) {
     $('onboarding').classList.remove('hidden');
     $('mainApp').classList.add('hidden');
   }
+  setTimeout(syncAppChromeMetrics, 0);
 
   const meta = user.user_metadata || {};
   $('userAvatar').src = meta.avatar_url || meta.picture || '';
@@ -391,6 +403,9 @@ async function bootstrapAuth() {
 
 // ── Inizializzazione su DOMContentLoaded ──
 document.addEventListener('DOMContentLoaded', () => {
+  syncAppChromeMetrics();
+  window.addEventListener('resize', syncAppChromeMetrics);
+
   // 1. SEMPRE init() subito con i dati locali (state è già caricato da loadState())
   if (state.onboardingDone) {
     $('loginScreen').classList.add('hidden');
@@ -1670,6 +1685,7 @@ function processOnboarding() {
 // ========================
 
 function switchScreen(name) {
+  currentScreen = name;
   $$('.screen').forEach(s => s.classList.remove('active'));
   const el = $('screen' + name.charAt(0).toUpperCase() + name.slice(1));
   if (el) el.classList.add('active');
@@ -1679,6 +1695,11 @@ function switchScreen(name) {
   if (name==='status') renderStatus();
   else if (name==='quests') renderQuests();
   else if (name==='boss') renderBossGrid();
+
+  setTimeout(() => {
+    syncAppChromeMetrics();
+    maybeShowSystemPopup('screen-switch');
+  }, 120);
 }
 
 $$('.nav-btn').forEach(btn => {
@@ -1704,11 +1725,123 @@ function showToast(msg, type='success') {
   setTimeout(() => t.remove(), 3200);
 }
 
+function ensureSystemPopupLoop() {
+  if (_systemPopupInterval) return;
+  _systemPopupInterval = setInterval(() => {
+    maybeShowSystemPopup('passive');
+  }, 30000);
+}
+
+function removeSystemPopup(node) {
+  if (!node) return;
+  node.style.animation = 'sysOut .25s ease-in forwards';
+  setTimeout(() => node.remove(), 240);
+}
+
+function showSystemPopup({ title, body, tone='info', badge='SYSTEM' }) {
+  const layer = $('systemPopupLayer');
+  if (!layer) return;
+  _lastSystemPopupAt = Date.now();
+
+  const popup = document.createElement('div');
+  popup.className = `system-popup ${tone}`;
+  popup.innerHTML = `
+    <button class="system-popup-close" aria-label="Chiudi">✕</button>
+    <div class="system-popup-header">
+      <span class="system-popup-badge">${badge}</span>
+      <div class="system-popup-title">${title}</div>
+    </div>
+    <div class="system-popup-body">${body}</div>
+  `;
+  layer.prepend(popup);
+
+  const closeBtn = popup.querySelector('.system-popup-close');
+  if (closeBtn) closeBtn.addEventListener('click', () => removeSystemPopup(popup));
+  setTimeout(() => removeSystemPopup(popup), 7200);
+}
+
+function getSystemPopupCandidates() {
+  const candidates = [];
+  const completedToday = (state.todayCompletedDetails || []).length;
+  const activeDebuffs = state.activeDebuffs || [];
+  const today = new Date().toDateString();
+
+  if ((!state.lastAssessmentDate || state.lastAssessmentDate !== today) && currentScreen !== 'assess') {
+    candidates.push({
+      tone: 'warning',
+      badge: 'ALERT',
+      title: 'ASSESSMENT RICHIESTO',
+      body: 'Esegui la valutazione giornaliera per ottenere quest e consigli piu accurati.',
+    });
+  }
+
+  if (activeDebuffs.length > 0) {
+    candidates.push({
+      tone: 'warning',
+      badge: 'WARNING',
+      title: 'DEBUFF ATTIVI',
+      body: `Sono presenti ${activeDebuffs.length} debuff. Priorita a recovery, respirazione e reset vagale.`,
+    });
+  }
+
+  if (currentScreen === 'quests' && currentQuests.length > 0) {
+    const nextQuest = currentQuests[0];
+    candidates.push({
+      tone: 'info',
+      badge: 'QUEST',
+      title: 'MISSIONE RACCOMANDATA',
+      body: `${nextQuest.icon} ${nextQuest.name} e pronta nel board. Difficolta ${nextQuest.diff}/10.`,
+    });
+  }
+
+  if (completedToday >= 3) {
+    candidates.push({
+      tone: 'reward',
+      badge: 'CHAIN',
+      title: 'RITMO DI CACCIA ELEVATO',
+      body: `Hai completato ${completedToday} quest oggi. Mantieni il momentum per streak e combo.`,
+    });
+  }
+
+  if (state.bossesDefeated.length === 0 && currentScreen === 'status') {
+    candidates.push({
+      tone: 'info',
+      badge: 'BOSS',
+      title: 'BOSS CHAMBER BLOCCATA',
+      body: 'Accumula livelli e quest chiave per sbloccare il primo boss della camera.',
+    });
+  }
+
+  return candidates;
+}
+
+function maybeShowSystemPopup(trigger='passive', forcedPopup=null) {
+  if (document.hidden) return;
+  if (forcedPopup) {
+    showSystemPopup(forcedPopup);
+    return;
+  }
+  if (!currentUser) return;
+
+  const minGap = trigger === 'passive' ? 35000 : 12000;
+  if (Date.now() - _lastSystemPopupAt < minGap) return;
+
+  const candidates = getSystemPopupCandidates();
+  if (!candidates.length) return;
+
+  const chance = trigger === 'passive' ? 0.35 : 0.55;
+  if (Math.random() > chance) return;
+
+  const popup = candidates[Math.floor(Math.random() * candidates.length)];
+  showSystemPopup(popup);
+}
+
 // ========================
 // RENDER: STATUS
 // ========================
 
 function renderStatus() {
+  ensureSystemPopupLoop();
   const nm = $('playerNameLg');
   nm.textContent = state.playerName || 'HUNTER';
   nm.dataset.text = nm.textContent;
@@ -1873,6 +2006,7 @@ function renderQuestTabs() {
 }
 
 function renderQuests() {
+  ensureSystemPopupLoop();
   renderQuestTabs();
   const dailyBonus = getDailyBonus();
   const tabDef = QUEST_TAB_DEFS.find(t => t.id === questTab);
@@ -2317,6 +2451,12 @@ function completeQuest(quest, mode, timeBonus) {
 
   renderQuests();
   renderStatus();
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'SYSTEM',
+    title: 'QUEST CLEAR',
+    body: 'Quest completata. Il Quest Board ha gia allocato la prossima missione disponibile.',
+  });
 }
 
 function completeWeeklyQuest(wq) {
@@ -2933,6 +3073,14 @@ function initAssessment() {
     renderAssessResult(input, ansState, debuffs);
     triggerGlitch();
     showToast('Biomarcatori analizzati','success');
+    showSystemPopup({
+      tone: isForcedRest() ? 'warning' : 'info',
+      badge: isForcedRest() ? 'WARNING' : 'GUIDE',
+      title: isForcedRest() ? 'FORCED REST DAY' : 'ANALISI COMPLETATA',
+      body: isForcedRest()
+        ? 'Il sistema consiglia recovery e protocolli di calma. Riduci le quest ad alto stress.'
+        : `Stato ${ansState}. Il board ha aggiornato priorita e missioni consigliate.`,
+    });
   });
 
   $('btnReassess').addEventListener('click', () => {
