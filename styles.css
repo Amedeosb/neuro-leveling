@@ -443,6 +443,17 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .ai-config-btn:hover{border-color:var(--secondary);color:var(--secondary)}
 .ai-config-box{max-width:380px;width:92%;text-align:left;padding:28px 24px}
 .ai-config-box .ov-title{text-align:center;margin-bottom:6px}
+.settings-intro{text-align:center;margin:10px 0 16px}
+.settings-section{padding:14px 14px 16px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.03);margin-bottom:16px}
+.settings-section-title{font-family:var(--font-d);font-size:.9rem;font-weight:700;letter-spacing:1.5px;color:var(--primary);margin-bottom:6px}
+.settings-section-title.danger{color:var(--accent)}
+.settings-copy{line-height:1.5}
+.settings-danger-zone{border-color:rgba(255,51,102,.35);background:rgba(255,51,102,.06)}
+.reset-account-box{max-width:420px}
+.settings-warning-card{padding:14px;border:1px solid rgba(255,51,102,.28);border-radius:10px;background:rgba(255,51,102,.08);margin-bottom:16px}
+.settings-warning-title{font-family:var(--font-d);font-size:.9rem;font-weight:700;letter-spacing:1.5px;color:var(--accent);margin-bottom:8px}
+.settings-warning-list{font-size:.9rem;line-height:1.55;color:var(--text-dim)}
+.btn-danger[disabled]{opacity:.45;cursor:not-allowed}
 
 /* ==================== TYPING INDICATOR ==================== */
 .chat-msg.typing{background:var(--surface);border:1px solid var(--border);padding:12px 18px;align-self:flex-start;border-bottom-left-radius:4px}

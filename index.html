@@ -464,12 +464,16 @@
     </div>
   </div>
 
-  <!-- AI CONFIG MODAL -->
+  <!-- SETTINGS MODAL -->
   <div class="overlay hidden" id="aiConfigModal">
     <div class="overlay-box ai-config-box">
-      <h2 class="ov-title">⚙ CONFIGURAZIONE AI</h2>
-      <p class="cq-hint" style="margin:10px 0 16px;text-align:center">Inserisci la tua OpenRouter API key per attivare le risposte AI dello Shadow Guide.</p>
+      <h2 class="ov-title">⚙ IMPOSTAZIONI</h2>
+      <p class="cq-hint settings-intro">Gestisci AI e sicurezza del tuo profilo.</p>
       <div class="cq-form">
+        <div class="settings-section">
+          <div class="settings-section-title">Shadow Guide AI</div>
+          <p class="cq-hint settings-copy">Inserisci la tua OpenRouter API key per attivare le risposte AI dello Shadow Guide.</p>
+        </div>
         <div class="onb-field">
           <label class="onb-label">OPENROUTER API KEY</label>
           <input type="password" class="onb-input" id="aiApiKey" placeholder="sk-or-..." autocomplete="off">
@@ -488,9 +492,36 @@
           </select>
           <p class="cq-hint">Alcuni modelli sono gratuiti su OpenRouter. Vedi i prezzi sul sito.</p>
         </div>
+        <div class="settings-section settings-danger-zone">
+          <div class="settings-section-title danger">Zona Pericolosa</div>
+          <p class="cq-hint settings-copy">Resetta tutti i progressi del tuo account, inclusi assessment iniziale, livelli, quest completate, streak e boss sconfitti. L'accesso resta attivo, ma il profilo riparte da zero.</p>
+          <button class="btn-danger full-w" id="btnOpenResetAccount">RESETTA ACCOUNT</button>
+        </div>
         <div class="cq-actions">
           <button class="btn-primary full-w" id="btnSaveAiKey">SALVA</button>
           <button class="btn-danger full-w" id="btnCancelAiConfig">ANNULLA</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="resetAccountModal">
+    <div class="overlay-box ai-config-box reset-account-box">
+      <h2 class="ov-title">⚠ RESET ACCOUNT</h2>
+      <p class="cq-hint settings-intro">Operazione irreversibile. Per confermare digita l'email del tuo account.</p>
+      <div class="cq-form">
+        <div class="settings-warning-card">
+          <div class="settings-warning-title">Verranno azzerati</div>
+          <p class="settings-warning-list">Classe iniziale, livelli, statistiche, quest, streak, boss, assessment, inventario e progressi salvati nel cloud.</p>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">EMAIL DI CONFERMA</label>
+          <input type="text" class="onb-input" id="resetAccountConfirmInput" placeholder="nome@dominio.com" autocomplete="off">
+          <p class="cq-hint">Digita esattamente: <span id="resetAccountExpected"></span></p>
+        </div>
+        <div class="cq-actions">
+          <button class="btn-danger full-w" id="btnConfirmResetAccount" disabled>CONFERMA RESET</button>
+          <button class="btn-secondary full-w" id="btnCancelResetAccount">ANNULLA</button>
         </div>
       </div>
     </div>
@@ -512,7 +543,7 @@
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="supabase-config.js?v=17"></script>
-  <script src="app.js?v=17"></script>
+  <script src="supabase-config.js?v=18"></script>
+  <script src="app.js?v=18"></script>
 </body>
 </html>

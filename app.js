@@ -220,8 +220,17 @@ function writeStoredState(snapshot, uid = currentUser?.id) {
   if (uid) localStorage.setItem(getStorageKey(uid), serialized);
 }
 
+function clearStoredState(uid = currentUser?.id) {
+  localStorage.removeItem(getStorageKey());
+  if (uid) localStorage.removeItem(getStorageKey(uid));
+}
+
 function getBestLocalState(uid) {
   return readStoredState(uid) || readStoredState() || { ...DEFAULT_STATE };
+}
+
+function createFreshState() {
+  return JSON.parse(JSON.stringify(DEFAULT_STATE));
 }
 
 // Carica stato da Supabase (con timeout), con fallback su localStorage
@@ -2706,12 +2715,74 @@ function initCompanion() {
   if (cancelCfg) cancelCfg.addEventListener('click', () => {
     $('aiConfigModal').classList.add('hidden');
   });
+  const openResetBtn = $('btnOpenResetAccount');
+  if (openResetBtn) openResetBtn.addEventListener('click', openResetAccountModal);
+  const resetInput = $('resetAccountConfirmInput');
+  if (resetInput) resetInput.addEventListener('input', syncResetAccountConfirmation);
+  const cancelResetBtn = $('btnCancelResetAccount');
+  if (cancelResetBtn) cancelResetBtn.addEventListener('click', closeResetAccountModal);
+  const confirmResetBtn = $('btnConfirmResetAccount');
+  if (confirmResetBtn) confirmResetBtn.addEventListener('click', resetAccountProgress);
 }
 
 function openAiConfig() {
   $('aiApiKey').value = getAiApiKey();
   $('aiModelSelect').value = getAiModel();
   $('aiConfigModal').classList.remove('hidden');
+}
+
+function getResetConfirmationText() {
+  return currentUser?.email || 'RESETTA ACCOUNT';
+}
+
+function syncResetAccountConfirmation() {
+  const input = $('resetAccountConfirmInput');
+  const confirmBtn = $('btnConfirmResetAccount');
+  if (!input || !confirmBtn) return;
+  confirmBtn.disabled = input.value.trim() !== getResetConfirmationText();
+}
+
+function openResetAccountModal() {
+  $('resetAccountExpected').textContent = getResetConfirmationText();
+  $('resetAccountConfirmInput').value = '';
+  syncResetAccountConfirmation();
+  $('resetAccountModal').classList.remove('hidden');
+}
+
+function closeResetAccountModal() {
+  $('resetAccountModal').classList.add('hidden');
+  $('resetAccountConfirmInput').value = '';
+  syncResetAccountConfirmation();
+}
+
+async function resetAccountProgress() {
+  const confirmText = getResetConfirmationText();
+  if ($('resetAccountConfirmInput').value.trim() !== confirmText) return;
+
+  clearTimeout(_saveTimeout);
+  state = createFreshState();
+  clearStoredState(currentUser?.id);
+  writeStoredState(state, currentUser?.id);
+
+  if (currentUser) {
+    const { error } = await supabaseClient
+      .from('players')
+      .upsert({ id: currentUser.id, state: state });
+    if (error) {
+      console.warn('Supabase reset error:', error);
+      showToast('Reset locale completato, ma il cloud non ha confermato il reset.', 'warning');
+    }
+  }
+
+  closeResetAccountModal();
+  $('aiConfigModal').classList.add('hidden');
+  _initDone = false;
+  init();
+  $('loginScreen').classList.add('hidden');
+  $('onboarding').classList.remove('hidden');
+  $('mainApp').classList.add('hidden');
+  goOnbStep(0);
+  showToast('Account resettato. Assessment iniziale riattivato.', 'success');
 }
 
 async function sendChat() {
