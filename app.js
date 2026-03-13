@@ -680,7 +680,7 @@ const DEFAULT_STATE = {
   factionRep: { PHYSIQUE:0, COGNITIVE:0, NEURAL:0, SOCIAL:0 },
   criticalHits: 0,
   todayCompletedDetails: [],
-  questTab: 'daily',
+  questTab: 'corpo',
   customQuests: [],
 };
 
@@ -1572,16 +1572,25 @@ function renderStatus() {
 // ========================
 
 let currentQuests = [];
-let questTab = 'daily';
+let questTab = 'corpo';
+
+const QUEST_TAB_DEFS = [
+  { id:'corpo',    label:'💪 CORPO',     filter: q => q.cat === 'PHYSIQUE' },
+  { id:'mente',    label:'🧠 MENTE',     filter: q => q.cat === 'COGNITIVE' || q.cat === 'NEURAL' },
+  { id:'emozioni', label:'💜 EMOZIONI',   filter: q => q.cat === 'SOCIAL' || q.type === 'RECOVERY' },
+  { id:'timed',    label:'⏱ TIMED',      filter: q => !!q.timed },
+  { id:'nontimed', label:'📋 NON TIMED', filter: q => !q.timed },
+  { id:'weekly',   label:'WEEKLY',        filter: null },
+  { id:'chains',   label:'CHAINS',        filter: null },
+  { id:'custom',   label:'CUSTOM',        filter: null },
+];
 
 function renderQuestTabs() {
   const tabs = $('questTabs');
   if (!tabs) return;
-  const tabList = ['daily','weekly','chains','custom'];
-  const labels = { daily:'DAILY', weekly:'WEEKLY', chains:'CHAINS', custom:'CUSTOM' };
-  tabs.innerHTML = tabList.map(t => {
-    const active = questTab === t ? 'tab-active' : '';
-    return `<button class="quest-tab ${active}" data-tab="${t}">${labels[t]}</button>`;
+  tabs.innerHTML = QUEST_TAB_DEFS.map(t => {
+    const active = questTab === t.id ? 'tab-active' : '';
+    return `<button class="quest-tab ${active}" data-tab="${t.id}">${t.label}</button>`;
   }).join('') + `<button class="quest-tab add-quest-btn" id="btnAddQuestTab">＋</button>`;
   tabs.querySelectorAll('.quest-tab[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => { questTab = btn.dataset.tab; renderQuests(); });
@@ -1593,7 +1602,8 @@ function renderQuestTabs() {
 function renderQuests() {
   renderQuestTabs();
   const dailyBonus = getDailyBonus();
-  if (questTab === 'daily') renderDailyQuests(dailyBonus);
+  const tabDef = QUEST_TAB_DEFS.find(t => t.id === questTab);
+  if (tabDef && tabDef.filter) renderDailyQuests(dailyBonus, tabDef.filter);
   else if (questTab === 'weekly') renderWeeklyQuests();
   else if (questTab === 'custom') renderCustomQuests();
   else renderChainQuests();
@@ -1601,9 +1611,11 @@ function renderQuests() {
   renderComboTracker();
 }
 
-function renderDailyQuests(dailyBonus) {
+function renderDailyQuests(dailyBonus, filterFn) {
   const lastA = state.assessmentHistory[state.assessmentHistory.length-1] || null;
-  currentQuests = getAvailableQuests(lastA);
+  let allQuests = getAvailableQuests(lastA);
+  if (filterFn) allQuests = allQuests.filter(filterFn);
+  currentQuests = allQuests;
 
   const listEl = $('questList');
   listEl.innerHTML = currentQuests.map(q => {
