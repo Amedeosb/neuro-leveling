@@ -155,40 +155,60 @@ function showLogin() {
 }
 
 // ── Auth: logica principale ──
-// onAuthStateChange gestisce tutti gli eventi auth (SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED)
-// Con flowType:'pkce', Supabase scambia automaticamente il ?code= con i token
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
   console.log('[AUTH] event:', event, 'user:', !!session?.user);
-
   if (event === 'SIGNED_OUT') {
     showLogin();
-  } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') && session?.user && !_appEntered) {
+  } else if (session?.user && !_appEntered) {
     await enterApp(session.user);
   }
 });
 
 // ── Inizializzazione auth su DOMContentLoaded ──
-// Con flowType:'pkce' e detectSessionInUrl:true, Supabase scambia automaticamente
-// il ?code= nell'URL con i token. getSession() aspetta il completamento dello scambio.
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    // getSession() con PKCE gestisce automaticamente lo scambio del code OAuth
-    // e recupera la sessione dal localStorage al refresh
-    const { data, error } = await supabaseClient.auth.getSession();
-    if (error) {
-      console.error('[AUTH] getSession error:', error);
+    // Caso 1: ritorno da redirect OAuth con ?code= (flow PKCE)
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    if (code) {
+      console.log('[AUTH] PKCE code trovato, scambio in corso...');
+      // Salva l'URL completo con il code PRIMA di pulirlo
+      const fullUrlWithCode = window.location.href;
+      // Pulisci l'URL subito per evitare loop al refresh
+      history.replaceState(null, '', window.location.pathname);
+      // exchangeCodeForSession scambia il code con i token e salva in localStorage
+      const { data, error } = await supabaseClient.auth.exchangeCodeForSession(fullUrlWithCode);
+      if (error) {
+        console.error('[AUTH] exchangeCodeForSession error:', error);
+        // Fallback: prova getSession nel caso onAuthStateChange abbia già gestito il code
+        const { data: fallbackData } = await supabaseClient.auth.getSession();
+        if (fallbackData?.session?.user) {
+          await enterApp(fallbackData.session.user);
+          return;
+        }
+        showLogin();
+        return;
+      }
+      if (data?.session?.user) {
+        await enterApp(data.session.user);
+        return;
+      }
     }
+
+    // Caso 2: sessione già presente in localStorage (refresh della pagina)
+    const { data } = await supabaseClient.auth.getSession();
     if (data?.session?.user) {
       await enterApp(data.session.user);
       return;
     }
-    // Nessuna sessione → mostra login dopo attesa per onAuthStateChange
+
+    // Caso 3: nessuna sessione → mostra login
     setTimeout(() => {
       if (!_appEntered) showLogin();
-    }, 2000);
+    }, 1500);
   } catch (e) {
     console.error('[AUTH] Init error:', e);
     showLogin();
