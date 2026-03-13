@@ -119,11 +119,10 @@ function saveState() {
 }
 
 // Funzione che gestisce l'ingresso nell'app dopo l'auth
-let _appEntered = false; // previene doppie chiamate a init()
+let _appEntered = false;
 async function enterApp(user) {
   if (_appEntered) return;
   _appEntered = true;
-  _authInitialized = true;
   currentUser = user;
   // Pulisci hash residuo da OAuth (es. /#)
   if (window.location.hash) {
@@ -138,7 +137,6 @@ async function enterApp(user) {
 }
 
 function showLogin() {
-  _authInitialized = true;
   _appEntered = false;
   currentUser = null;
   if ($('loginScreen')) {
@@ -148,10 +146,12 @@ function showLogin() {
   }
 }
 
-// Auth state listener
-let _authInitialized = false;
+// ── Auth: strategia semplificata ──
+// 1. onAuthStateChange gestisce SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED
+// 2. Su DOMContentLoaded, controlliamo esplicitamente getSession() come fallback
 
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
+  // Aspetta che il DOM sia pronto
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
@@ -159,46 +159,44 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
 
   try {
     if (session?.user) {
-      // Utente presente: entra nell'app (anche da TOKEN_REFRESHED dopo refresh pagina)
       await enterApp(session.user);
     } else if (event === 'SIGNED_OUT') {
-      // Logout esplicito
       showLogin();
-    } else if (event === 'INITIAL_SESSION') {
-      // Sessione iniziale null: token potrebbe essere in fase di refresh.
-      // Aspetta un attimo prima di mostrare login, per dare tempo al TOKEN_REFRESHED.
-      setTimeout(() => {
-        if (!_appEntered) showLogin();
-      }, 1500);
     }
+    // Per INITIAL_SESSION senza user: non fare nulla subito.
+    // Il fallback DOMContentLoaded gestirà il caso.
   } catch (e) {
     console.error('Auth flow error:', e);
     showLogin();
   }
 });
 
-// Backup: se dopo 4s non è successo nulla, forza il check sessione
+// Fallback: su DOMContentLoaded, se non siamo entrati, controlla sessione
 document.addEventListener('DOMContentLoaded', () => {
+  // Primo check veloce dopo 500ms (copre il caso in cui onAuthStateChange è lento)
   setTimeout(async () => {
-    if (_authInitialized) return;
+    if (_appEntered) return;
     try {
-      // Prima prova getSession
+      const { data } = await supabaseClient.auth.getSession();
+      if (data?.session?.user) {
+        await enterApp(data.session.user);
+      }
+    } catch (e) {}
+  }, 500);
+
+  // Secondo check definitivo dopo 3s
+  setTimeout(async () => {
+    if (_appEntered) return;
+    try {
       const { data } = await supabaseClient.auth.getSession();
       if (data?.session?.user) {
         await enterApp(data.session.user);
         return;
       }
-      // Se non c'è sessione, prova a fare refresh esplicito
-      const { data: rData } = await supabaseClient.auth.refreshSession();
-      if (rData?.session?.user) {
-        await enterApp(rData.session.user);
-        return;
-      }
-      showLogin();
-    } catch (e) {
-      showLogin();
-    }
-  }, 4000);
+    } catch (e) {}
+    // Se dopo 3s non c'è sessione, mostra login
+    if (!_appEntered) showLogin();
+  }, 3000);
 });
 
 // Event listeners login/logout
