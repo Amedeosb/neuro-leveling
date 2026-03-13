@@ -119,9 +119,16 @@ function saveState() {
 }
 
 // Funzione che gestisce l'ingresso nell'app dopo l'auth
+let _appEntered = false; // previene doppie chiamate a init()
 async function enterApp(user) {
-  currentUser = user;
+  if (_appEntered) return;
+  _appEntered = true;
   _authInitialized = true;
+  currentUser = user;
+  // Pulisci hash residuo da OAuth (es. /#)
+  if (window.location.hash) {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
   $('loginScreen').classList.add('hidden');
   const meta = user.user_metadata || {};
   $('userAvatar').src = meta.avatar_url || meta.picture || '';
@@ -132,6 +139,7 @@ async function enterApp(user) {
 
 function showLogin() {
   _authInitialized = true;
+  _appEntered = false;
   currentUser = null;
   if ($('loginScreen')) {
     $('loginScreen').classList.remove('hidden');
@@ -140,31 +148,28 @@ function showLogin() {
   }
 }
 
-// Rileva se la pagina è un callback OAuth (ha token/codice nell'URL)
-function isOAuthCallback() {
-  const hash = window.location.hash;
-  const params = new URLSearchParams(window.location.search);
-  return hash.includes('access_token') || hash.includes('refresh_token') || params.has('code');
-}
-
 // Auth state listener
 let _authInitialized = false;
-const _isCallback = isOAuthCallback();
 
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
-  // Ignora TOKEN_REFRESHED se app è già inizializzata
-  if (_authInitialized && event === 'TOKEN_REFRESHED') return;
+  console.log('[AUTH]', event, !!session?.user);
 
   try {
     if (session?.user) {
+      // Utente presente: entra nell'app (anche da TOKEN_REFRESHED dopo refresh pagina)
       await enterApp(session.user);
-    } else if (!_isCallback) {
-      // Se NON è un callback OAuth, mostra login subito.
-      // Se È un callback, aspetta che Supabase finisca il PKCE exchange.
+    } else if (event === 'SIGNED_OUT') {
+      // Logout esplicito
       showLogin();
+    } else if (event === 'INITIAL_SESSION') {
+      // Sessione iniziale null: token potrebbe essere in fase di refresh.
+      // Aspetta un attimo prima di mostrare login, per dare tempo al TOKEN_REFRESHED.
+      setTimeout(() => {
+        if (!_appEntered) showLogin();
+      }, 1500);
     }
   } catch (e) {
     console.error('Auth flow error:', e);
@@ -177,16 +182,23 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(async () => {
     if (_authInitialized) return;
     try {
+      // Prima prova getSession
       const { data } = await supabaseClient.auth.getSession();
       if (data?.session?.user) {
         await enterApp(data.session.user);
-      } else {
-        showLogin();
+        return;
       }
+      // Se non c'è sessione, prova a fare refresh esplicito
+      const { data: rData } = await supabaseClient.auth.refreshSession();
+      if (rData?.session?.user) {
+        await enterApp(rData.session.user);
+        return;
+      }
+      showLogin();
     } catch (e) {
       showLogin();
     }
-  }, _isCallback ? 5000 : 3000);
+  }, 4000);
 });
 
 // Event listeners login/logout
