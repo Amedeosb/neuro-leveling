@@ -125,25 +125,50 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
-  if (session && session.user) {
-    currentUser = session.user;
-    $('loginScreen').classList.add('hidden');
-    // Mostra info utente
-    const meta = currentUser.user_metadata || {};
-    $('userAvatar').src = meta.avatar_url || meta.picture || '';
-    $('userEmail').textContent = currentUser.email || '';
-    // Carica dati dal cloud
-    state = await loadStateFromCloud(currentUser.id);
-    init();
-  } else {
-    currentUser = null;
-    if ($('loginScreen')) {
-      $('loginScreen').classList.remove('hidden');
-      $('onboarding').classList.add('hidden');
-      $('mainApp').classList.add('hidden');
+  try {
+    if (session && session.user) {
+      currentUser = session.user;
+      _authInitialized = true;
+      $('loginScreen').classList.add('hidden');
+      // Mostra info utente
+      const meta = currentUser.user_metadata || {};
+      $('userAvatar').src = meta.avatar_url || meta.picture || '';
+      $('userEmail').textContent = currentUser.email || '';
+      // Carica dati dal cloud
+      state = await loadStateFromCloud(currentUser.id);
+      init();
+    } else {
+      currentUser = null;
+      _authInitialized = true;
+      if ($('loginScreen')) {
+        $('loginScreen').classList.remove('hidden');
+        $('onboarding').classList.add('hidden');
+        $('mainApp').classList.add('hidden');
+      }
     }
+  } catch (e) {
+    console.error('Auth flow error:', e);
+    // Fallback: mostra login screen per evitare schermata nera
+    if ($('loginScreen')) $('loginScreen').classList.remove('hidden');
   }
 });
+
+// Safety net: se dopo 5s l'auth non ha risposto, mostra il login
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      if (!_authInitialized && $('loginScreen')) {
+        $('loginScreen').classList.remove('hidden');
+      }
+    }, 5000);
+  });
+} else {
+  setTimeout(() => {
+    if (!_authInitialized && $('loginScreen')) {
+      $('loginScreen').classList.remove('hidden');
+    }
+  }, 5000);
+}
 
 // Event listeners login/logout
 document.addEventListener('DOMContentLoaded', () => {
@@ -2605,6 +2630,7 @@ $('btnDismissLvl').addEventListener('click', () => {
 // ========================
 
 function init() {
+  try {
   // Migrate state
   if (!state.weeklyCompleted)  state.weeklyCompleted = [];
   if (!state.chainProgress)    state.chainProgress = {};
@@ -2628,6 +2654,14 @@ function init() {
   if (state.onboardingDone) {
     renderStatus();
     checkAchievements();
+  }
+  } catch (e) {
+    console.error('Init error:', e);
+    // Assicurati che l'app sia visibile anche se c'è un errore parziale
+    if (state.onboardingDone) {
+      $('onboarding').classList.add('hidden');
+      $('mainApp').classList.remove('hidden');
+    }
   }
 }
 
