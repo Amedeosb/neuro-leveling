@@ -130,8 +130,12 @@ async function enterApp(user) {
   if (window.location.hash) {
     history.replaceState(null, '', window.location.pathname);
   }
+  // Nascondi subito login e mostra sfondo scuro (evita nero)
   document.body.classList.remove('loading');
   $('loginScreen').classList.add('hidden');
+  $('onboarding').classList.add('hidden');
+  // Mostra mainApp subito con schermata di caricamento
+  $('mainApp').classList.remove('hidden');
   const meta = user.user_metadata || {};
   $('userAvatar').src = meta.avatar_url || meta.picture || '';
   $('userEmail').textContent = user.email || '';
@@ -2693,6 +2697,9 @@ function init() {
   initCustomQuestModal();
   initAssessment();
   initTimedQuestOverlay();
+  // Rimuovi overlay di caricamento
+  const overlay = $('appLoadingOverlay');
+  if (overlay) overlay.style.display = 'none';
   if (state.onboardingDone) {
     switchScreen('status');
     renderStatus();
@@ -2700,6 +2707,9 @@ function init() {
   }
   } catch (e) {
     console.error('Init error:', e);
+    // Rimuovi overlay di caricamento anche in caso di errore
+    const overlay = $('appLoadingOverlay');
+    if (overlay) overlay.style.display = 'none';
     // Assicurati che l'app sia visibile anche se c'è un errore parziale
     if (state.onboardingDone) {
       $('onboarding').classList.add('hidden');

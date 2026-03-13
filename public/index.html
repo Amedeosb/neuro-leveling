@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=11">
+  <link rel="stylesheet" href="styles.css?v=12">
 
   <!-- Supabase SDK loaded in body before config/app scripts -->
 </head>
@@ -246,6 +246,12 @@
   <!-- MAIN APP                        -->
   <!-- ============================== -->
   <div class="app hidden" id="mainApp">
+
+    <!-- Loading overlay dentro mainApp -->
+    <div id="appLoadingOverlay" style="position:fixed;inset:0;background:var(--bg);z-index:7999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+      <div style="font-size:3rem;animation:float 1s ease-in-out infinite">⚡</div>
+      <div style="font-family:'Orbitron',monospace;font-size:.9rem;letter-spacing:3px;color:#9050FF">SINCRONIZZAZIONE...</div>
+    </div>
 
     <!-- User Profile Bar -->
     <div class="user-bar" id="userBar">
@@ -497,7 +503,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="supabase-config.js?v=11"></script>
-  <script src="app.js?v=11"></script>
+  <script src="supabase-config.js?v=12"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>
