@@ -124,9 +124,9 @@ async function enterApp(user) {
   if (_appEntered) return;
   _appEntered = true;
   currentUser = user;
-  // Pulisci hash residuo da OAuth (es. /#)
+  // Pulisci hash residuo da OAuth
   if (window.location.hash) {
-    history.replaceState(null, '', window.location.pathname + window.location.search);
+    history.replaceState(null, '', window.location.pathname);
   }
   $('loginScreen').classList.add('hidden');
   const meta = user.user_metadata || {};
@@ -146,57 +146,72 @@ function showLogin() {
   }
 }
 
-// ── Auth: strategia semplificata ──
-// 1. onAuthStateChange gestisce SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED
-// 2. Su DOMContentLoaded, controlliamo esplicitamente getSession() come fallback
+// ── GESTIONE MANUALE REDIRECT OAUTH ──
+// Dopo il redirect da Google, l'URL contiene i token nell'hash (#access_token=...)
+// Li prendiamo manualmente e chiamiamo setSession()
+async function handleOAuthTokensFromUrl() {
+  const hash = window.location.hash.substring(1); // rimuovi il #
+  if (!hash) return null;
+  const params = new URLSearchParams(hash);
+  const accessToken = params.get('access_token');
+  const refreshToken = params.get('refresh_token');
+  if (!accessToken || !refreshToken) return null;
+  
+  console.log('[AUTH] Token OAuth trovati nell\'URL, imposto sessione...');
+  // Pulisci l'URL subito
+  history.replaceState(null, '', window.location.pathname);
+  
+  const { data, error } = await supabaseClient.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken
+  });
+  if (error) {
+    console.error('[AUTH] Errore setSession:', error);
+    return null;
+  }
+  return data?.session?.user || null;
+}
 
+// ── Auth: logica principale ──
+// onAuthStateChange gestisce eventi live (logout, token refresh dopo che l'app è entrata)
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
-  // Aspetta che il DOM sia pronto
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
-  console.log('[AUTH]', event, !!session?.user);
+  console.log('[AUTH] event:', event, 'user:', !!session?.user);
 
-  try {
-    if (session?.user) {
-      await enterApp(session.user);
-    } else if (event === 'SIGNED_OUT') {
-      showLogin();
-    }
-    // Per INITIAL_SESSION senza user: non fare nulla subito.
-    // Il fallback DOMContentLoaded gestirà il caso.
-  } catch (e) {
-    console.error('Auth flow error:', e);
+  if (event === 'SIGNED_OUT') {
     showLogin();
+  } else if (session?.user && !_appEntered) {
+    await enterApp(session.user);
   }
 });
 
-// Fallback: su DOMContentLoaded, se non siamo entrati, controlla sessione
-document.addEventListener('DOMContentLoaded', () => {
-  // Primo check veloce dopo 500ms (copre il caso in cui onAuthStateChange è lento)
-  setTimeout(async () => {
-    if (_appEntered) return;
-    try {
-      const { data } = await supabaseClient.auth.getSession();
-      if (data?.session?.user) {
-        await enterApp(data.session.user);
-      }
-    } catch (e) {}
-  }, 500);
+// ── Inizializzazione auth su DOMContentLoaded ──
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    // 1. Controlla se siamo tornati da un redirect OAuth con token nell'URL
+    const oauthUser = await handleOAuthTokensFromUrl();
+    if (oauthUser) {
+      await enterApp(oauthUser);
+      return;
+    }
 
-  // Secondo check definitivo dopo 3s
-  setTimeout(async () => {
-    if (_appEntered) return;
-    try {
-      const { data } = await supabaseClient.auth.getSession();
-      if (data?.session?.user) {
-        await enterApp(data.session.user);
-        return;
-      }
-    } catch (e) {}
-    // Se dopo 3s non c'è sessione, mostra login
-    if (!_appEntered) showLogin();
-  }, 3000);
+    // 2. Controlla se c'è già una sessione salvata (refresh della pagina)
+    const { data } = await supabaseClient.auth.getSession();
+    if (data?.session?.user) {
+      await enterApp(data.session.user);
+      return;
+    }
+
+    // 3. Nessuna sessione → mostra login (con piccolo delay per onAuthStateChange)
+    setTimeout(() => {
+      if (!_appEntered) showLogin();
+    }, 1000);
+  } catch (e) {
+    console.error('[AUTH] Init error:', e);
+    showLogin();
+  }
 });
 
 // Event listeners login/logout
