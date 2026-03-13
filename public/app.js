@@ -140,8 +140,17 @@ function showLogin() {
   }
 }
 
+// Rileva se la pagina è un callback OAuth (ha token/codice nell'URL)
+function isOAuthCallback() {
+  const hash = window.location.hash;
+  const params = new URLSearchParams(window.location.search);
+  return hash.includes('access_token') || hash.includes('refresh_token') || params.has('code');
+}
+
 // Auth state listener
 let _authInitialized = false;
+const _isCallback = isOAuthCallback();
+
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
@@ -152,7 +161,9 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
   try {
     if (session?.user) {
       await enterApp(session.user);
-    } else {
+    } else if (!_isCallback) {
+      // Se NON è un callback OAuth, mostra login subito.
+      // Se È un callback, aspetta che Supabase finisca il PKCE exchange.
       showLogin();
     }
   } catch (e) {
@@ -161,7 +172,7 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
   }
 });
 
-// Backup: se dopo 3s non è successo nulla, forza il check sessione
+// Backup: se dopo 4s non è successo nulla, forza il check sessione
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(async () => {
     if (_authInitialized) return;
@@ -175,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
       showLogin();
     }
-  }, 3000);
+  }, _isCallback ? 5000 : 3000);
 });
 
 // Event listeners login/logout
