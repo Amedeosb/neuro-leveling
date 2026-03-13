@@ -1070,10 +1070,10 @@ function getAvailableQuests(assessment) {
 }
 
 // ========================
-// COMPANION AI  (Gemini-powered with local fallback)
+// COMPANION AI  (OpenRouter-powered with local fallback)
 // ========================
 
-const AI_MODEL = 'gemini-2.0-flash';
+const AI_MODEL = 'google/gemini-2.0-flash-001';
 
 function getAiApiKey() {
   return localStorage.getItem('neuro_ai_key') || '';
@@ -1081,6 +1081,14 @@ function getAiApiKey() {
 
 function setAiApiKey(key) {
   localStorage.setItem('neuro_ai_key', key);
+}
+
+function getAiModel() {
+  return localStorage.getItem('neuro_ai_model') || AI_MODEL;
+}
+
+function setAiModel(model) {
+  localStorage.setItem('neuro_ai_model', model);
 }
 
 function buildSystemPrompt() {
@@ -1127,24 +1135,34 @@ async function companionReplyAI(msg) {
   const apiKey = getAiApiKey();
   if (!apiKey) return companionReplyLocal(msg);
 
+  const model = getAiModel();
+
   try {
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL}:generateContent?key=${apiKey}`, {
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': location.origin,
+      },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: buildSystemPrompt() }] },
-        contents: [{ parts: [{ text: msg }] }],
-        generationConfig: { maxOutputTokens: 300, temperature: 0.8 },
+        model,
+        max_tokens: 300,
+        temperature: 0.8,
+        messages: [
+          { role: 'system', content: buildSystemPrompt() },
+          { role: 'user', content: msg },
+        ],
       }),
     });
 
     if (!resp.ok) {
-      if (resp.status === 400 || resp.status === 403) return 'Chiave API non valida. Configurala nelle impostazioni (⚙).';
+      if (resp.status === 401 || resp.status === 403) return 'API Key non valida. Configurala nelle impostazioni (⚙).';
       return companionReplyLocal(msg);
     }
 
     const data = await resp.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = data?.choices?.[0]?.message?.content;
     if (text) return text.trim();
     return companionReplyLocal(msg);
   } catch (e) {
@@ -2421,7 +2439,9 @@ function initCompanion() {
   const saveKeyBtn = $('btnSaveAiKey');
   if (saveKeyBtn) saveKeyBtn.addEventListener('click', () => {
     const key = $('aiApiKey').value.trim();
+    const model = $('aiModelSelect').value.trim();
     setAiApiKey(key);
+    if (model) setAiModel(model);
     $('aiConfigModal').classList.add('hidden');
     showToast(key ? 'API Key salvata!' : 'API Key rimossa', 'success');
   });
@@ -2433,6 +2453,7 @@ function initCompanion() {
 
 function openAiConfig() {
   $('aiApiKey').value = getAiApiKey();
+  $('aiModelSelect').value = getAiModel();
   $('aiConfigModal').classList.remove('hidden');
 }
 
