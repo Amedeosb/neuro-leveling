@@ -9,6 +9,7 @@
 let currentUser = null;
 let _saveTimeout = null;
 let _googleLoginPending = false;
+const STORAGE_KEY = 'neuro_leveling_v2';
 const _domReadyPromise = document.readyState === 'loading'
   ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
   : Promise.resolve();
@@ -195,7 +196,32 @@ async function forgotPassword() {
 
 // Logout
 async function logout() {
+  await saveState({ immediate: true });
   await supabaseClient.auth.signOut();
+}
+
+function getStorageKey(uid) {
+  return uid ? `${STORAGE_KEY}:${uid}` : STORAGE_KEY;
+}
+
+function readStoredState(uid) {
+  try {
+    const raw = localStorage.getItem(getStorageKey(uid));
+    if (!raw) return null;
+    return { ...DEFAULT_STATE, ...JSON.parse(raw) };
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeStoredState(snapshot, uid = currentUser?.id) {
+  const serialized = JSON.stringify(snapshot);
+  localStorage.setItem(getStorageKey(), serialized);
+  if (uid) localStorage.setItem(getStorageKey(uid), serialized);
+}
+
+function getBestLocalState(uid) {
+  return readStoredState(uid) || readStoredState() || { ...DEFAULT_STATE };
 }
 
 // Carica stato da Supabase (con timeout), con fallback su localStorage
@@ -206,35 +232,47 @@ async function loadStateFromCloud(uid) {
       .from('players')
       .select('state')
       .eq('id', uid)
-      .single();
+      .maybeSingle();
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Cloud load timeout')), 5000)
     );
     const { data, error } = await Promise.race([cloudPromise, timeoutPromise]);
     if (!error && data && data.state) {
       const merged = { ...DEFAULT_STATE, ...data.state };
-      localStorage.setItem('neuro_leveling_v2', JSON.stringify(merged));
-      return merged;
+      writeStoredState(merged, uid);
+      return { state: merged, found: true };
     }
+    if (error) console.warn('Supabase load error:', error);
   } catch (e) {
     console.warn('Supabase load error:', e);
   }
-  // Fallback su localStorage
-  try {
-    const local = localStorage.getItem('neuro_leveling_v2');
-    if (local) return { ...DEFAULT_STATE, ...JSON.parse(local) };
-  } catch (e) {}
-  return { ...DEFAULT_STATE };
+  return { state: getBestLocalState(uid), found: false };
 }
 
 // Salva su Supabase + localStorage (debounced)
-function saveState() {
-  localStorage.setItem('neuro_leveling_v2', JSON.stringify(state));
-  if (!currentUser) return;
+async function saveStateNow() {
+  writeStoredState(state);
+  if (!currentUser) return { error: null };
+  const { error } = await supabaseClient
+    .from('players')
+    .upsert({ id: currentUser.id, state: state });
+  if (error) console.warn('Supabase save error:', error);
+  return { error };
+}
+
+function saveState(options = {}) {
+  const { immediate = false } = options;
+  writeStoredState(state);
+  if (!currentUser) return immediate ? Promise.resolve({ error: null }) : undefined;
+
   clearTimeout(_saveTimeout);
+
+  if (immediate) {
+    return saveStateNow();
+  }
+
   _saveTimeout = setTimeout(() => {
-    supabaseClient.from('players').upsert({ id: currentUser.id, state: state })
-      .then(({ error }) => { if (error) console.warn('Supabase save error:', error); });
+    saveStateNow();
   }, 1000);
 }
 
@@ -252,6 +290,7 @@ async function enterApp(user) {
   if (_appEntered) return;
   _appEntered = true;
   currentUser = user;
+  state = getBestLocalState(user.id);
   $('loginScreen').classList.add('hidden');
 
   // Mostra subito la schermata corretta per evitare il flash nero
@@ -273,13 +312,17 @@ async function enterApp(user) {
 
   // Carica dal cloud in background e aggiorna solo quando pronto.
   try {
-    const cloudState = await loadStateFromCloud(user.id);
-    const localSnapshot = localStorage.getItem('neuro_leveling_v2');
-    const sameAsLocal = localSnapshot && JSON.stringify(cloudState) === JSON.stringify({ ...DEFAULT_STATE, ...JSON.parse(localSnapshot) });
+    const { state: cloudState, found } = await loadStateFromCloud(user.id);
+    const currentStateJson = JSON.stringify(state);
+    const cloudStateJson = JSON.stringify(cloudState);
     state = cloudState;
-    if (!sameAsLocal) {
+    writeStoredState(state, user.id);
+    if (cloudStateJson !== currentStateJson) {
       _initDone = false;
       init();
+    }
+    if (!found && state.onboardingDone) {
+      await saveState({ immediate: true });
     }
   } catch (e) {
     console.warn('Cloud load failed, using local state');
@@ -898,11 +941,7 @@ function findQuestById(id) {
 }
 
 function loadState() {
-  try {
-    const s = localStorage.getItem('neuro_leveling_v2');
-    if (s) { const p = JSON.parse(s); return { ...DEFAULT_STATE, ...p }; }
-  } catch(_){}
-  return { ...DEFAULT_STATE };
+  return readStoredState() || { ...DEFAULT_STATE };
 }
 
 function initStats() {
@@ -1523,9 +1562,9 @@ function initOnboarding() {
   });
 
   // Enter
-  $('onbEnter').addEventListener('click', () => {
+  $('onbEnter').addEventListener('click', async () => {
     state.onboardingDone = true;
-    saveState();
+    await saveState({ immediate: true });
     $('onboarding').classList.add('hidden');
     $('mainApp').classList.remove('hidden');
     switchScreen('status');
