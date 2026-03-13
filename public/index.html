@@ -468,12 +468,25 @@
   <div class="overlay hidden" id="aiConfigModal">
     <div class="overlay-box ai-config-box">
       <h2 class="ov-title">⚙ CONFIGURAZIONE AI</h2>
-      <p class="cq-hint" style="margin:10px 0 16px;text-align:center">Inserisci la tua API key per attivare le risposte AI dello Shadow Guide.</p>
+      <p class="cq-hint" style="margin:10px 0 16px;text-align:center">Inserisci la tua OpenRouter API key per attivare le risposte AI dello Shadow Guide.</p>
       <div class="cq-form">
         <div class="onb-field">
-          <label class="onb-label">GOOGLE GEMINI API KEY</label>
-          <input type="password" class="onb-input" id="aiApiKey" placeholder="AIza..." autocomplete="off">
-          <p class="cq-hint">Ottienila gratis su <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:var(--primary)">aistudio.google.com/apikey</a></p>
+          <label class="onb-label">OPENROUTER API KEY</label>
+          <input type="password" class="onb-input" id="aiApiKey" placeholder="sk-or-..." autocomplete="off">
+          <p class="cq-hint">Ottienila su <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" style="color:var(--primary)">openrouter.ai/keys</a></p>
+        </div>
+        <div class="onb-field">
+          <label class="onb-label">MODELLO</label>
+          <select class="onb-select" id="aiModelSelect">
+            <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash (gratis)</option>
+            <option value="google/gemini-2.5-flash-preview">Gemini 2.5 Flash Preview</option>
+            <option value="meta-llama/llama-4-maverick">Llama 4 Maverick (gratis)</option>
+            <option value="deepseek/deepseek-chat-v3-0324">DeepSeek V3</option>
+            <option value="anthropic/claude-sonnet-4">Claude Sonnet 4</option>
+            <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+            <option value="openai/gpt-4o">GPT-4o</option>
+          </select>
+          <p class="cq-hint">Alcuni modelli sono gratuiti su OpenRouter. Vedi i prezzi sul sito.</p>
         </div>
         <div class="cq-actions">
           <button class="btn-primary full-w" id="btnSaveAiKey">SALVA</button>
