@@ -83,27 +83,27 @@ async function logout() {
 
 // Carica stato da Supabase, con fallback su localStorage
 async function loadStateFromCloud(uid) {
+  // Prova dal cloud
   try {
     const { data, error } = await supabaseClient
       .from('players')
       .select('state')
       .eq('id', uid)
       .single();
-    if (data && data.state) {
-      return { ...DEFAULT_STATE, ...data.state };
-    }
-    // Migra da localStorage se esiste
-    const local = localStorage.getItem('neuro_leveling_v2');
-    if (local) {
-      const parsed = { ...DEFAULT_STATE, ...JSON.parse(local) };
-      await supabaseClient.from('players').upsert({ id: uid, state: parsed });
-      return parsed;
+    if (!error && data && data.state) {
+      // Successo dal cloud, aggiorna anche localStorage
+      const merged = { ...DEFAULT_STATE, ...data.state };
+      localStorage.setItem('neuro_leveling_v2', JSON.stringify(merged));
+      return merged;
     }
   } catch (e) {
-    console.error('Supabase load error:', e);
+    console.warn('Supabase load error:', e);
+  }
+  // Fallback su localStorage
+  try {
     const local = localStorage.getItem('neuro_leveling_v2');
     if (local) return { ...DEFAULT_STATE, ...JSON.parse(local) };
-  }
+  } catch (e) {}
   return { ...DEFAULT_STATE };
 }
 
@@ -114,61 +114,69 @@ function saveState() {
   clearTimeout(_saveTimeout);
   _saveTimeout = setTimeout(() => {
     supabaseClient.from('players').upsert({ id: currentUser.id, state: state })
-      .then(({ error }) => { if (error) console.error('Supabase save error:', error); });
+      .then(({ error }) => { if (error) console.warn('Supabase save error:', error); });
   }, 1000);
 }
 
-// Auth state listener — entry point dell'app
+// Funzione che gestisce l'ingresso nell'app dopo l'auth
+async function enterApp(user) {
+  currentUser = user;
+  _authInitialized = true;
+  $('loginScreen').classList.add('hidden');
+  const meta = user.user_metadata || {};
+  $('userAvatar').src = meta.avatar_url || meta.picture || '';
+  $('userEmail').textContent = user.email || '';
+  state = await loadStateFromCloud(user.id);
+  init();
+}
+
+function showLogin() {
+  _authInitialized = true;
+  currentUser = null;
+  if ($('loginScreen')) {
+    $('loginScreen').classList.remove('hidden');
+    $('onboarding')?.classList.add('hidden');
+    $('mainApp')?.classList.add('hidden');
+  }
+}
+
+// Auth state listener
 let _authInitialized = false;
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
-  // Aspetta che il DOM sia pronto
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
   }
+  // Ignora TOKEN_REFRESHED se app è già inizializzata
+  if (_authInitialized && event === 'TOKEN_REFRESHED') return;
+
   try {
-    if (session && session.user) {
-      currentUser = session.user;
-      _authInitialized = true;
-      $('loginScreen').classList.add('hidden');
-      // Mostra info utente
-      const meta = currentUser.user_metadata || {};
-      $('userAvatar').src = meta.avatar_url || meta.picture || '';
-      $('userEmail').textContent = currentUser.email || '';
-      // Carica dati dal cloud
-      state = await loadStateFromCloud(currentUser.id);
-      init();
+    if (session?.user) {
+      await enterApp(session.user);
     } else {
-      currentUser = null;
-      _authInitialized = true;
-      if ($('loginScreen')) {
-        $('loginScreen').classList.remove('hidden');
-        $('onboarding').classList.add('hidden');
-        $('mainApp').classList.add('hidden');
-      }
+      showLogin();
     }
   } catch (e) {
     console.error('Auth flow error:', e);
-    // Fallback: mostra login screen per evitare schermata nera
-    if ($('loginScreen')) $('loginScreen').classList.remove('hidden');
+    showLogin();
   }
 });
 
-// Safety net: se dopo 5s l'auth non ha risposto, mostra il login
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => {
-      if (!_authInitialized && $('loginScreen')) {
-        $('loginScreen').classList.remove('hidden');
+// Backup: se dopo 3s non è successo nulla, forza il check sessione
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(async () => {
+    if (_authInitialized) return;
+    try {
+      const { data } = await supabaseClient.auth.getSession();
+      if (data?.session?.user) {
+        await enterApp(data.session.user);
+      } else {
+        showLogin();
       }
-    }, 5000);
-  });
-} else {
-  setTimeout(() => {
-    if (!_authInitialized && $('loginScreen')) {
-      $('loginScreen').classList.remove('hidden');
+    } catch (e) {
+      showLogin();
     }
-  }, 5000);
-}
+  }, 3000);
+});
 
 // Event listeners login/logout
 document.addEventListener('DOMContentLoaded', () => {
