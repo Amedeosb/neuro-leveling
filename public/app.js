@@ -154,34 +154,9 @@ function showLogin() {
   }
 }
 
-// ── GESTIONE MANUALE REDIRECT OAUTH ──
-// Dopo il redirect da Google, l'URL contiene i token nell'hash (#access_token=...)
-// Li prendiamo manualmente e chiamiamo setSession()
-async function handleOAuthTokensFromUrl() {
-  const hash = window.location.hash.substring(1); // rimuovi il #
-  if (!hash) return null;
-  const params = new URLSearchParams(hash);
-  const accessToken = params.get('access_token');
-  const refreshToken = params.get('refresh_token');
-  if (!accessToken || !refreshToken) return null;
-  
-  console.log('[AUTH] Token OAuth trovati nell\'URL, imposto sessione...');
-  // Pulisci l'URL subito
-  history.replaceState(null, '', window.location.pathname);
-  
-  const { data, error } = await supabaseClient.auth.setSession({
-    access_token: accessToken,
-    refresh_token: refreshToken
-  });
-  if (error) {
-    console.error('[AUTH] Errore setSession:', error);
-    return null;
-  }
-  return data?.session?.user || null;
-}
-
 // ── Auth: logica principale ──
-// onAuthStateChange gestisce eventi live (logout, token refresh dopo che l'app è entrata)
+// onAuthStateChange gestisce tutti gli eventi auth (SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED)
+// Con flowType:'pkce', Supabase scambia automaticamente il ?code= con i token
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r));
@@ -190,26 +165,30 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
 
   if (event === 'SIGNED_OUT') {
     showLogin();
-  } else if (session?.user && !_appEntered) {
+  } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') && session?.user && !_appEntered) {
     await enterApp(session.user);
   }
 });
 
 // ── Inizializzazione auth su DOMContentLoaded ──
-// Con detectSessionInUrl:true, Supabase gestisce automaticamente i token OAuth dall'hash URL.
-// onAuthStateChange si occupa di tutto: primo login, refresh, e sessioni persistenti.
+// Con flowType:'pkce' e detectSessionInUrl:true, Supabase scambia automaticamente
+// il ?code= nell'URL con i token. getSession() aspetta il completamento dello scambio.
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    // Controlla se c'è già una sessione attiva (refresh della pagina o sessione persistente)
-    const { data } = await supabaseClient.auth.getSession();
+    // getSession() con PKCE gestisce automaticamente lo scambio del code OAuth
+    // e recupera la sessione dal localStorage al refresh
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) {
+      console.error('[AUTH] getSession error:', error);
+    }
     if (data?.session?.user) {
       await enterApp(data.session.user);
       return;
     }
-    // Nessuna sessione → mostra login dopo breve attesa per onAuthStateChange
+    // Nessuna sessione → mostra login dopo attesa per onAuthStateChange
     setTimeout(() => {
       if (!_appEntered) showLogin();
-    }, 1500);
+    }, 2000);
   } catch (e) {
     console.error('[AUTH] Init error:', e);
     showLogin();
