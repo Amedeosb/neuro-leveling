@@ -128,6 +128,7 @@ async function enterApp(user) {
   if (window.location.hash) {
     history.replaceState(null, '', window.location.pathname);
   }
+  document.body.classList.remove('loading');
   $('loginScreen').classList.add('hidden');
   const meta = user.user_metadata || {};
   $('userAvatar').src = meta.avatar_url || meta.picture || '';
@@ -139,6 +140,7 @@ async function enterApp(user) {
 function showLogin() {
   _appEntered = false;
   currentUser = null;
+  document.body.classList.remove('loading');
   if ($('loginScreen')) {
     $('loginScreen').classList.remove('hidden');
     $('onboarding')?.classList.add('hidden');
@@ -2696,6 +2698,7 @@ function init() {
   initAssessment();
   initTimedQuestOverlay();
   if (state.onboardingDone) {
+    switchScreen('status');
     renderStatus();
     checkAchievements();
   }
@@ -2705,6 +2708,7 @@ function init() {
     if (state.onboardingDone) {
       $('onboarding').classList.add('hidden');
       $('mainApp').classList.remove('hidden');
+      switchScreen('status');
     }
   }
 }

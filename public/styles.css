@@ -10,6 +10,8 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:18px;-webkit-text-size-adjust:100%}
 body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height:100vh;min-height:100dvh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+body.loading::before{content:'';position:fixed;inset:0;background:var(--bg);z-index:9990;display:flex;align-items:center;justify-content:center}
+body.loading::after{content:'⚡';position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-size:3rem;z-index:9991;animation:float 1s ease-in-out infinite}
 
 /* SCANLINES */
 .scanlines{position:fixed;inset:0;z-index:9998;pointer-events:none;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.06) 2px,rgba(0,0,0,.06) 4px)}
@@ -119,7 +121,8 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .boss-btn .boss-btn-inner{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,var(--secondary),var(--accent));display:flex;align-items:center;justify-content:center;font-size:1.2rem;margin-top:-14px;box-shadow:0 0 20px rgba(144,80,255,.4)}
 .boss-btn.active .boss-btn-inner{box-shadow:0 0 30px rgba(144,80,255,.7)}
 
-/* ==================== SCREENS ==================== */
+/* ==================== SCREENS ==================== */
+.app{display:block}
 .app.hidden{display:none}
 .screen{display:none;position:fixed;inset:0;bottom:var(--nav);overflow-y:auto;-webkit-overflow-scrolling:touch}
 .screen.active{display:block;animation:sIn .25s ease-out}
