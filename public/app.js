@@ -34,7 +34,9 @@ function getSupabaseErrorMessage(msg) {
 async function googleLogin() {
   const { error } = await supabaseClient.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin + window.location.pathname }
+    options: {
+      redirectTo: window.location.href.split('#')[0].split('?')[0]
+    }
   });
   if (error) showAuthError(getSupabaseErrorMessage(error.message));
 }
@@ -190,26 +192,20 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
 });
 
 // ── Inizializzazione auth su DOMContentLoaded ──
+// Con detectSessionInUrl:true, Supabase gestisce automaticamente i token OAuth dall'hash URL.
+// onAuthStateChange si occupa di tutto: primo login, refresh, e sessioni persistenti.
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    // 1. Controlla se siamo tornati da un redirect OAuth con token nell'URL
-    const oauthUser = await handleOAuthTokensFromUrl();
-    if (oauthUser) {
-      await enterApp(oauthUser);
-      return;
-    }
-
-    // 2. Controlla se c'è già una sessione salvata (refresh della pagina)
+    // Controlla se c'è già una sessione attiva (refresh della pagina o sessione persistente)
     const { data } = await supabaseClient.auth.getSession();
     if (data?.session?.user) {
       await enterApp(data.session.user);
       return;
     }
-
-    // 3. Nessuna sessione → mostra login (con piccolo delay per onAuthStateChange)
+    // Nessuna sessione → mostra login dopo breve attesa per onAuthStateChange
     setTimeout(() => {
       if (!_appEntered) showLogin();
-    }, 1000);
+    }, 1500);
   } catch (e) {
     console.error('[AUTH] Init error:', e);
     showLogin();
