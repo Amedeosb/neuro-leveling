@@ -16,6 +16,7 @@ let _lastSystemPopupAt = 0;
 let _systemAudioContext = null;
 let _systemAudioUnlocked = false;
 let _gearCooldownInterval = null;
+const SYSTEM_POPUPS_ENABLED = false;
 const _domReadyPromise = document.readyState === 'loading'
   ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
   : Promise.resolve();
@@ -2848,6 +2849,7 @@ function playSystemAlertSound(level='soft') {
 }
 
 function ensureSystemPopupLoop() {
+  if (!SYSTEM_POPUPS_ENABLED) return;
   if (_systemPopupInterval) return;
   _systemPopupInterval = setInterval(() => {
     maybeShowSystemPopup('passive');
@@ -2861,6 +2863,7 @@ function removeSystemPopup(node) {
 }
 
 function showSystemPopup({ title, body, tone='info', badge='SYSTEM', urgent=false, sound=null }) {
+  if (!SYSTEM_POPUPS_ENABLED) return;
   const layer = $('systemPopupLayer');
   if (!layer) return;
   _lastSystemPopupAt = Date.now();
@@ -2946,6 +2949,7 @@ function getSystemPopupCandidates() {
 }
 
 function maybeShowSystemPopup(trigger='passive', forcedPopup=null) {
+  if (!SYSTEM_POPUPS_ENABLED) return;
   if (document.hidden) return;
   if (forcedPopup) {
     showSystemPopup(forcedPopup);

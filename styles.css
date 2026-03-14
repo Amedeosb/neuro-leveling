@@ -538,6 +538,8 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .overlay{position:fixed;inset:0;z-index:10001;display:flex;align-items:flex-start;justify-content:center;padding:calc(20px + var(--safe-t)) 14px calc(20px + var(--safe-b));overflow-y:auto;background:rgba(0,0,0,.85);backdrop-filter:blur(6px);-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y}
 .overlay.hidden{display:none}
 .overlay-box{text-align:center;padding:36px 28px;animation:ovIn .5s ease-out;max-width:min(92vw,480px);max-height:calc(100dvh - 40px - var(--safe-t) - var(--safe-b));overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;margin:auto 0}
+#aiConfigModal,#resetAccountModal{align-items:flex-start;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y}
+#aiConfigModal .overlay-box,#resetAccountModal .overlay-box{margin:0 auto;max-height:none;overflow:visible}
 @keyframes ovIn{from{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}
 .ov-icon{font-size:4rem;filter:drop-shadow(0 0 30px rgba(144,80,255,.7));margin-bottom:12px;animation:float 2s ease-in-out infinite}
 .ov-title{font-family:var(--font-d);font-size:1.8rem;font-weight:900;letter-spacing:4px;color:var(--secondary);text-shadow:0 0 25px rgba(144,80,255,.5)}
