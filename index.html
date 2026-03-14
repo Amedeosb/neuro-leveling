@@ -274,6 +274,7 @@
 
     <nav class="nav-bar">
       <button class="nav-btn active" data-screen="status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>STATUS</span></button>
+      <button class="nav-btn" data-screen="codex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg><span>CODEX</span></button>
       <button class="nav-btn" data-screen="quests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg><span>QUEST</span></button>
       <button class="nav-btn" data-screen="gear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4h12l2 4-8 12L4 8l2-4z"/><path d="M9 8l3 12 3-12"/></svg><span>GEAR</span></button>
       <button class="nav-btn boss-btn" data-screen="boss"><div class="boss-btn-inner">💀</div><span>BOSS</span></button>
@@ -312,6 +313,15 @@
       </div>
     </section>
 
+    <section class="screen" id="screenCodex">
+      <div class="screen-content">
+        <h1 class="screen-title glitch-text" data-text="SYSTEM CODEX">SYSTEM CODEX</h1>
+        <p class="screen-sub">Manuale del sistema: rank, stat, boss, loot table e bonus set.</p>
+        <div class="codex-tabs" id="codexTabs"></div>
+        <div class="codex-content" id="codexContent"></div>
+      </div>
+    </section>
+
     <!-- QUESTS -->
     <section class="screen" id="screenQuests">
       <div class="screen-content">
@@ -335,6 +345,8 @@
           <div class="gear-power-desc" id="gearPowerDesc">Nessun bonus attivo</div>
         </div>
         <div class="gear-set-list" id="gearSetList"></div>
+        <div class="section-label">MATERIALS</div>
+        <div class="gear-materials-list" id="gearMaterialsList"></div>
         <div class="section-label">SLOT EQUIPAGGIATI</div>
         <div class="gear-slots-grid" id="gearSlotsGrid"></div>
         <div class="section-label">ARSENALE</div>

@@ -1204,6 +1204,26 @@ const FLASK_EFFECTS = {
   VOID_FLASK: { name:'Void Flask Overclock', icon:'🧿', cooldownMs: 1000 * 60 * 14, buffId:'NEURAL_SURGE' },
 };
 
+const MATERIAL_CATALOG = {
+  SHADOW_SHARD: { id:'SHADOW_SHARD', name:'Shadow Shard', icon:'🌑', desc:'Frammento da mobility, stealth e output rapido.' },
+  MONARCH_FRAGMENT: { id:'MONARCH_FRAGMENT', name:'Monarch Fragment', icon:'👁', desc:'Scheggia cognitiva per set da focus, social e scan.' },
+  IRON_ORE: { id:'IRON_ORE', name:'Iron Ore', icon:'⛓️', desc:'Materiale da resilienza, tankiness e build ad alta tenuta.' },
+  BOSS_CORE: { id:'BOSS_CORE', name:'Boss Core', icon:'💠', desc:'Catalizzatore raro necessario per i livelli di forge superiori.' },
+};
+
+const SET_PRIMARY_MATERIAL = {
+  SHADOWFORGED: 'SHADOW_SHARD',
+  MONARCH_SYNTH: 'MONARCH_FRAGMENT',
+  IRON_HEART: 'IRON_ORE',
+};
+
+const UPGRADE_MAX_LEVEL = 3;
+const UPGRADE_RARITY_BASE = {
+  RARE: { main: 2, core: 0 },
+  EPIC: { main: 3, core: 1 },
+  LEGENDARY: { main: 4, core: 1 },
+};
+
 // ========================
 // FACTIONS
 // ========================
@@ -1284,6 +1304,9 @@ const DEFAULT_STATE = {
   specialQuestCompleted: [],
   setUpgrades: {},
   flaskCooldowns: {},
+  materials: {},
+  equipmentUpgrades: {},
+  codexTab: 'rank',
 };
 
 let state = loadState(); // Carica subito da localStorage
@@ -1323,7 +1346,7 @@ function getEquipmentBonusForStat(statId) {
   const itemBonus = Object.values(equipped).reduce((sum, itemId) => {
     if (!itemId) return sum;
     const item = EQUIPMENT_CATALOG[itemId];
-    return sum + (item?.bonuses?.[statId] || 0);
+    return sum + (getItemBonuses(item)?.[statId] || 0);
   }, 0);
   return itemBonus + getSetBonusForStat(statId) + getSetUpgradeBonusForStat(statId);
 }
@@ -1466,6 +1489,88 @@ function grantSetUpgrade(setId, bonuses, sourceLabel='Boss Reward') {
 
 function getSetUpgradeBonusForStat(statId) {
   return Object.values(state.setUpgrades || {}).reduce((sum, upgrade) => sum + (upgrade?.[statId] || 0), 0);
+}
+
+function getItemUpgradeLevel(itemId) {
+  return Math.max(0, Math.min(UPGRADE_MAX_LEVEL, state.equipmentUpgrades?.[itemId] || 0));
+}
+
+function getItemBonuses(item) {
+  if (!item) return {};
+  const upgradeLevel = getItemUpgradeLevel(item.id);
+  return Object.fromEntries(Object.entries(item.bonuses || {}).map(([statId, amount]) => [statId, amount + upgradeLevel]));
+}
+
+function getItemDisplayName(item) {
+  if (!item) return '';
+  const upgradeLevel = getItemUpgradeLevel(item.id);
+  return upgradeLevel > 0 ? `${item.name} +${upgradeLevel}` : item.name;
+}
+
+function getUpgradeCost(item) {
+  const currentLevel = getItemUpgradeLevel(item.id);
+  if (currentLevel >= UPGRADE_MAX_LEVEL) return null;
+  const rarityBase = UPGRADE_RARITY_BASE[item.rarity] || UPGRADE_RARITY_BASE.RARE;
+  const nextLevel = currentLevel + 1;
+  const mainMaterial = SET_PRIMARY_MATERIAL[item.set] || 'IRON_ORE';
+  return {
+    nextLevel,
+    costs: {
+      [mainMaterial]: rarityBase.main + currentLevel * 2,
+      BOSS_CORE: rarityBase.core + Math.max(0, currentLevel),
+    },
+  };
+}
+
+function hasUpgradeMaterials(costs) {
+  return Object.entries(costs || {}).every(([materialId, amount]) => (state.materials?.[materialId] || 0) >= amount);
+}
+
+function formatMaterialCost(costs) {
+  return Object.entries(costs || {})
+    .filter(([, amount]) => amount > 0)
+    .map(([materialId, amount]) => `${MATERIAL_CATALOG[materialId]?.icon || '✦'} ${amount}`)
+    .join(' · ');
+}
+
+function awardMaterial(materialId, amount=1, sourceLabel='loot') {
+  if (!MATERIAL_CATALOG[materialId]) return;
+  if (!state.materials) state.materials = {};
+  state.materials[materialId] = (state.materials[materialId] || 0) + amount;
+  showToast(`${MATERIAL_CATALOG[materialId].icon} +${amount} ${MATERIAL_CATALOG[materialId].name}`, 'xp');
+}
+
+function spendMaterials(costs) {
+  for (const [materialId, amount] of Object.entries(costs || {})) {
+    state.materials[materialId] = Math.max(0, (state.materials[materialId] || 0) - amount);
+  }
+}
+
+function upgradeEquipmentItem(itemId) {
+  const item = EQUIPMENT_CATALOG[itemId];
+  if (!item) return;
+  const upgrade = getUpgradeCost(item);
+  if (!upgrade) {
+    showToast('Pezzo gia al massimo', 'alert');
+    return;
+  }
+  if (!hasUpgradeMaterials(upgrade.costs)) {
+    showToast('Materiali insufficienti per la forge', 'alert');
+    return;
+  }
+  spendMaterials(upgrade.costs);
+  if (!state.equipmentUpgrades) state.equipmentUpgrades = {};
+  state.equipmentUpgrades[itemId] = upgrade.nextLevel;
+  saveState();
+  renderGear();
+  renderStatus();
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'FORGE',
+    title: `${item.name} +${upgrade.nextLevel}`,
+    body: `Forge completata. Le statistiche del pezzo sono aumentate e il loadout e gia stato ricalcolato.`,
+    sound: 'reward',
+  });
 }
 
 function isFlaskItem(itemId) {
@@ -2219,6 +2324,7 @@ function switchScreen(name) {
   triggerGlitch();
 
   if (name==='status') renderStatus();
+  else if (name==='codex') renderCodex();
   else if (name==='quests') renderQuests();
   else if (name==='boss') renderBossGrid();
   else if (name==='gear') renderGear();
@@ -2622,6 +2728,12 @@ function renderDailyQuests(dailyBonus, filterFn) {
     const timedTag = q.timed ? '<span class="timed-tag">⏱ TIMED</span>' : '';
     const doneModeBadge = doneInfo?.mode ? `<span class="done-mode-badge" style="color:${DIFFICULTY_MODES[doneInfo.mode].color}">${DIFFICULTY_MODES[doneInfo.mode].icon} ${DIFFICULTY_MODES[doneInfo.mode].label}</span>` : '';
     const gearTag = q.equipmentId ? `<span class="daily-bonus-tag">${EQUIPMENT_CATALOG[q.equipmentId]?.icon || '🎁'} GEAR</span>` : '';
+    const lootPreview = q.type === 'SPECIAL'
+      ? `<div class="quest-loot-preview">${(SPECIAL_QUEST_LOOT_TABLES[q.id] || [{ itemId: q.equipmentId, weight: 100 }]).map(entry => {
+          const lootItem = EQUIPMENT_CATALOG[entry.itemId];
+          return `<span class="quest-loot-chip">${lootItem?.icon || '✦'} ${getItemDisplayName(lootItem)} · ${entry.weight}%</span>`;
+        }).join('')}</div>`
+      : '';
 
     // XP preview for each mode (matches completeQuest formula)
     const xpPreview = !done && !locked ? `<div class="diff-mode-selector" data-qid="${q.id}">
@@ -2649,6 +2761,7 @@ function renderDailyQuests(dailyBonus, filterFn) {
           <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
           <div class="q-desc">${q.desc}</div>
           <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
+          ${lootPreview}
           ${xpPreview}
           <div class="q-detail" id="detail-${q.id}">
             <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
@@ -2964,6 +3077,7 @@ function completeQuest(quest, mode, timeBonus) {
   const dailyBonus = getDailyBonus();
   let dailyMult = 1;
   if (dailyBonus.questId === quest.id && dailyBonus.bonus === '2X_XP') dailyMult = 2;
+  let selectedDropItemId = null;
 
   let totalG = 0, anyLvl = false;
   for (const rew of quest.rewards) {
@@ -2982,9 +3096,16 @@ function completeQuest(quest, mode, timeBonus) {
   if (quest.type === 'SPECIAL') {
     if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
     if (!state.specialQuestCompleted.includes(quest.id)) state.specialQuestCompleted.push(quest.id);
-    const dropItemId = getQuestDropItemId(quest);
-    if (dropItemId) awardEquipment(dropItemId);
+    selectedDropItemId = getQuestDropItemId(quest);
+    if (selectedDropItemId) awardEquipment(selectedDropItemId);
   }
+
+  const questMaterial = SET_PRIMARY_MATERIAL[quest.type === 'SPECIAL' ? (EQUIPMENT_CATALOG[selectedDropItemId]?.set || 'IRON_HEART') : ({ PHYSIQUE:'IRON_HEART', COGNITIVE:'MONARCH_SYNTH', NEURAL:'MONARCH_SYNTH', SOCIAL:'SHADOWFORGED' }[quest.cat] || 'IRON_HEART')];
+  if (questMaterial) {
+    const materialAmount = quest.type === 'SPECIAL' ? 2 : mode === 'hard' ? 2 : 1;
+    awardMaterial(questMaterial, materialAmount, quest.name);
+  }
+  if (quest.type === 'SPECIAL' || mode === 'hard') awardMaterial('BOSS_CORE', 1, quest.name);
 
   // Faction rep
   addFactionRep(quest.cat, Math.round(10 * rarityMult * modeInfo.xpMult));
@@ -3053,14 +3174,176 @@ function getGearRarityClass(rarity) {
   return `gear-rarity-${String(rarity || '').toLowerCase()}`;
 }
 
+const CODEX_TAB_DEFS = [
+  { id:'rank', label:'RANK' },
+  { id:'stats', label:'STATS' },
+  { id:'boss', label:'BOSS' },
+  { id:'drop', label:'DROP RATE' },
+  { id:'set', label:'SET BONUS' },
+];
+
+function renderCodex() {
+  const tabsEl = $('codexTabs');
+  const contentEl = $('codexContent');
+  if (!tabsEl || !contentEl) return;
+
+  const activeTab = state.codexTab || 'rank';
+  const rankInfo = getHunterRankInfo();
+  const playerClass = CLASS_DEFINITIONS.find(c => c.id === state.playerClass);
+  const allStats = [...PRIMARY_STATS, ...SECONDARY_STATS];
+  const effectiveStats = allStats
+    .map(stat => ({
+      ...stat,
+      base: getStatLv(stat.id),
+      bonus: getEquipmentBonusForStat(stat.id),
+      total: getEffectiveStatLv(stat.id),
+    }))
+    .sort((a, b) => b.total - a.total);
+  const setCounts = getEquippedSetCounts();
+
+  const codexPages = {
+    rank: `
+      <div class="codex-card">
+        <div class="codex-card-title">RANK PROTOCOL</div>
+        <div class="codex-card-copy">Hunter Rank è il livello globale del profilo. Parte dall'assessment iniziale e poi sale solo con quest, boss, gear e drop. Class Sync misura invece quanto la tua classe è allineata alla build attuale.</div>
+        <div class="codex-chip-list">
+          <span class="codex-chip">Hunter Rank ${rankInfo.rank}</span>
+          <span class="codex-chip">Class Sync ${getClassLevel()}</span>
+          <span class="codex-chip">Titolo ${getTitle()}</span>
+          <span class="codex-chip">Streak ${state.currentStreak}</span>
+        </div>
+      </div>
+      <div class="codex-card">
+        <div class="codex-card-title">BUILD STATUS</div>
+        <div class="codex-list">
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Classe attuale</div>
+              <div class="codex-row-copy">${playerClass ? `${playerClass.icon} ${playerClass.name} · ${playerClass.desc}` : 'Classe non assegnata.'}</div>
+            </div>
+            <div class="codex-chip">Sync ${getClassLevel()}</div>
+          </div>
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Progressione del rank</div>
+              <div class="codex-row-copy">${rankInfo.nextXp > 0 ? `${rankInfo.xpIntoRank} / ${rankInfo.nextXp} XP nel rank corrente.` : 'Rank massimo raggiunto.'}</div>
+            </div>
+            <div class="codex-chip">XP ${state.totalXP}</div>
+          </div>
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Gear power</div>
+              <div class="codex-row-copy">Include bonus item, set attivi e upgrade permanenti ottenuti dai boss.</div>
+            </div>
+            <div class="codex-chip">+${getTotalGearPower()}</div>
+          </div>
+        </div>
+      </div>`,
+    stats: `
+      <div class="codex-card">
+        <div class="codex-card-title">STAT MATRIX</div>
+        <div class="codex-card-copy">Valori effettivi già comprensivi di equipaggiamento, set bonus e forge levels.</div>
+        <div class="codex-list">
+          ${effectiveStats.map(stat => `
+            <div class="codex-row">
+              <div>
+                <div class="codex-row-title">${stat.icon} ${stat.name}</div>
+                <div class="codex-row-copy">Base ${stat.base}${stat.bonus ? ` · bonus gear/set +${stat.bonus}` : ''}</div>
+              </div>
+              <div class="codex-chip">LV ${stat.total}</div>
+            </div>`).join('')}
+        </div>
+      </div>`,
+    boss: `
+      <div class="codex-card">
+        <div class="codex-card-title">BOSS INDEX</div>
+        <div class="codex-list">
+          ${BOSS_DEFINITIONS.map(boss => {
+            const bossDrop = (BOSS_DROP_TABLES[boss.id] || [])[0];
+            const dropItem = bossDrop ? EQUIPMENT_CATALOG[bossDrop.itemId] : null;
+            const upgrade = BOSS_SET_UPGRADES[boss.id];
+            const defeated = (state.bossesDefeated || []).includes(boss.id);
+            return `
+              <div class="codex-row">
+                <div>
+                  <div class="codex-row-title">${boss.icon} ${boss.name}</div>
+                  <div class="codex-row-copy">LV ${boss.level} · ${defeated ? 'boss sconfitto' : `req ${boss.req.map(req => `${req.stat} ${req.minLv}`).join(' · ')}`}</div>
+                  <div class="codex-chip-list">
+                    ${dropItem ? `<span class="codex-chip">DROP ${dropItem.icon} ${getItemDisplayName(dropItem)}</span>` : ''}
+                    ${upgrade ? `<span class="codex-chip">SET ${EQUIPMENT_SET_BONUSES[upgrade.setId]?.name || upgrade.setId} · ${Object.entries(upgrade.bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}</span>` : ''}
+                  </div>
+                </div>
+                <div class="codex-chip">${defeated ? 'CLEAR' : 'LOCK/READY'}</div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`,
+    drop: `
+      <div class="codex-card">
+        <div class="codex-card-title">SPECIAL QUEST LOOT TABLE</div>
+        <div class="codex-list">
+          ${SPECIAL_QUESTS.map(quest => `
+            <div class="codex-row">
+              <div>
+                <div class="codex-row-title">${quest.icon} ${quest.name}</div>
+                <div class="codex-row-copy">${quest.desc}</div>
+                <div class="codex-chip-list">
+                  ${(SPECIAL_QUEST_LOOT_TABLES[quest.id] || [{ itemId: quest.equipmentId, weight: 100 }]).map(entry => {
+                    const item = EQUIPMENT_CATALOG[entry.itemId];
+                    return `<span class="codex-chip">${item?.icon || '✦'} ${getItemDisplayName(item)} · ${entry.weight}%</span>`;
+                  }).join('')}
+                </div>
+              </div>
+              <div class="codex-chip">${quest.cat}</div>
+            </div>`).join('')}
+        </div>
+      </div>`,
+    set: `
+      <div class="codex-card">
+        <div class="codex-card-title">SET BONUS MATRIX</div>
+        <div class="codex-list">
+          ${Object.entries(EQUIPMENT_SET_BONUSES).map(([setId, setDef]) => {
+            const upgrades = state.setUpgrades?.[setId] || {};
+            const material = MATERIAL_CATALOG[SET_PRIMARY_MATERIAL[setId]];
+            return `
+              <div class="codex-row">
+                <div>
+                  <div class="codex-row-title">${setDef.icon} ${setDef.name}</div>
+                  <div class="codex-row-copy">${Object.entries(setDef.thresholds).map(([threshold, stats]) => `${threshold}p: ${Object.entries(stats).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}`).join(' | ')}</div>
+                  <div class="codex-chip-list">
+                    <span class="codex-chip">Equip ${setCounts[setId] || 0}/4</span>
+                    <span class="codex-chip">Forge ${material?.icon || '✦'} ${material?.name || 'Materiale'}</span>
+                    ${Object.keys(upgrades).length ? `<span class="codex-chip">Boss upgrade ${Object.entries(upgrades).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}</span>` : ''}
+                  </div>
+                </div>
+                <div class="codex-chip">${(setCounts[setId] || 0) >= 4 ? 'FULL SET' : 'PARTIAL'}</div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`,
+  };
+
+  tabsEl.innerHTML = CODEX_TAB_DEFS.map(tab => `<button class="codex-tab ${tab.id === activeTab ? 'active' : ''}" data-codex-tab="${tab.id}">${tab.label}</button>`).join('');
+  contentEl.innerHTML = codexPages[activeTab] || codexPages.rank;
+
+  tabsEl.querySelectorAll('[data-codex-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.codexTab = btn.dataset.codexTab;
+      saveState();
+      renderCodex();
+    });
+  });
+}
+
 function renderGear() {
   const powerEl = $('gearPowerValue');
   const descEl = $('gearPowerDesc');
   const setListEl = $('gearSetList');
+  const materialsEl = $('gearMaterialsList');
   const slotsEl = $('gearSlotsGrid');
   const inventoryEl = $('gearInventoryList');
   const consumablesEl = $('gearConsumablesList');
-  if (!powerEl || !descEl || !setListEl || !slotsEl || !inventoryEl || !consumablesEl) return;
+  if (!powerEl || !descEl || !setListEl || !materialsEl || !slotsEl || !inventoryEl || !consumablesEl) return;
 
   const totalPower = getTotalGearPower();
   const equippedCount = Object.values(state.equippedGear || {}).filter(Boolean).length;
@@ -3090,10 +3373,19 @@ function renderGear() {
       </div>`;
   }).join('');
 
+  materialsEl.innerHTML = Object.values(MATERIAL_CATALOG).map(material => `
+    <div class="gear-material-card">
+      <div class="gear-material-name">${material.icon} ${material.name}</div>
+      <div class="gear-material-count">${state.materials?.[material.id] || 0}</div>
+      <div class="gear-material-desc">${material.desc}</div>
+    </div>`).join('');
+
   slotsEl.innerHTML = EQUIPMENT_SLOTS.map(slot => {
     const item = getEquippedItem(slot);
+    const itemBonuses = getItemBonuses(item);
+    const upgradeLevel = item ? getItemUpgradeLevel(item.id) : 0;
     const bonuses = item
-      ? Object.entries(item.bonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('')
+      ? Object.entries(itemBonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('')
       : '';
     return `
       <div class="gear-slot-card ${item ? 'equipped' : 'empty'}" data-slot="${slot}">
@@ -3102,13 +3394,13 @@ function renderGear() {
           <div class="gear-item-head">
             <div class="gear-item-icon">${item.icon}</div>
             <div>
-              <div class="gear-item-name">${item.name}</div>
+              <div class="gear-item-name">${getItemDisplayName(item)}</div>
               <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity}</div>
             </div>
           </div>
           <div class="gear-item-desc">${item.desc}</div>
           <div class="gear-item-bonuses">${bonuses}</div>
-          <div class="gear-slot-meta">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}</div>
+          <div class="gear-slot-meta">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}${upgradeLevel ? ` · FORGE +${upgradeLevel}` : ''}</div>
           <button class="btn ghost" data-unequip-slot="${slot}">Rimuovi</button>` : `
           <div class="gear-slot-empty">Slot vuoto. Completa la quest speciale collegata per attivarlo.</div>`}
       </div>`;
@@ -3118,14 +3410,16 @@ function renderGear() {
   const arsenalItems = owned.filter(item => !isFlaskItem(item.id));
   inventoryEl.innerHTML = arsenalItems.length ? arsenalItems.map(item => {
     const equipped = state.equippedGear?.[item.slot] === item.id;
-    const bonuses = Object.entries(item.bonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('');
+    const bonuses = Object.entries(getItemBonuses(item)).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('');
+    const upgrade = getUpgradeCost(item);
+    const canUpgrade = upgrade && hasUpgradeMaterials(upgrade.costs);
     return `
       <div class="gear-card ${equipped ? 'equipped' : ''}">
         <div class="gear-card-top">
           <div class="gear-item-head">
             <div class="gear-item-icon">${item.icon}</div>
             <div>
-              <div class="gear-item-name">${item.name}</div>
+              <div class="gear-item-name">${getItemDisplayName(item)}</div>
               <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
             </div>
           </div>
@@ -3133,7 +3427,16 @@ function renderGear() {
         </div>
         <div class="gear-item-desc">${item.desc}</div>
         <div class="gear-card-slot">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}</div>
-        <button class="btn ${equipped ? 'ghost' : ''}" data-equip-item="${item.id}">${equipped ? 'Equipaggiato' : 'Equipaggia'}</button>
+        <div class="gear-upgrade-row">
+          <div class="gear-upgrade-meta">
+            <div class="gear-upgrade-label">FORGE ${getItemUpgradeLevel(item.id) >= UPGRADE_MAX_LEVEL ? 'MAX' : `NEXT +${upgrade?.nextLevel || UPGRADE_MAX_LEVEL}`}</div>
+            <div class="gear-upgrade-cost">${upgrade ? formatMaterialCost(upgrade.costs) : 'Potenziamento massimo raggiunto'}</div>
+          </div>
+          <button class="btn ${canUpgrade ? '' : 'ghost'}" data-upgrade-item="${item.id}" ${upgrade ? '' : 'disabled'}>${upgrade ? 'Forge' : 'MAX'}</button>
+        </div>
+        <div class="gear-card-actions">
+          <button class="btn ${equipped ? 'ghost' : ''}" data-equip-item="${item.id}">${equipped ? 'Equipaggiato' : 'Equipaggia'}</button>
+        </div>
       </div>`;
   }).join('') : '<div class="gear-empty-state">Nessun equip ottenuto. Le missioni speciali iniziano a comparire quando alzi le stat richieste.</div>';
 
@@ -3143,27 +3446,38 @@ function renderGear() {
     const cooldownRemaining = getFlaskCooldownRemaining(item.id);
     const cooldownPct = effect.cooldownMs > 0 ? Math.max(0, Math.min(100, 100 - (cooldownRemaining / effect.cooldownMs) * 100)) : 100;
     const ready = cooldownRemaining <= 0;
+    const upgrade = getUpgradeCost(item);
+    const canUpgrade = upgrade && hasUpgradeMaterials(upgrade.costs);
     return `
       <div class="gear-consumable-card ${ready ? 'ready' : 'cooldown'}">
         <div class="gear-consumable-top">
           <div class="gear-item-head">
             <div class="gear-item-icon">${item.icon}</div>
             <div>
-              <div class="gear-item-name">${item.name}</div>
+              <div class="gear-item-name">${getItemDisplayName(item)}</div>
               <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
             </div>
           </div>
           <button class="btn ${ready ? '' : 'ghost'}" data-use-flask="${item.id}" ${ready ? '' : 'disabled'}>${ready ? 'Usa ora' : 'Cooldown'}</button>
         </div>
         <div class="gear-item-desc">${item.desc}</div>
+        <div class="gear-item-bonuses">${Object.entries(getItemBonuses(item)).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('')}</div>
         <div class="gear-consumable-track"><span style="width:${cooldownPct}%"></span></div>
         <div class="gear-consumable-meta">${effect.icon} ${effect.name} · ${ready ? 'READY' : `pronto tra ${formatTimeLeft(cooldownRemaining)}`}</div>
+        <div class="gear-upgrade-row">
+          <div class="gear-upgrade-meta">
+            <div class="gear-upgrade-label">FORGE ${getItemUpgradeLevel(item.id) >= UPGRADE_MAX_LEVEL ? 'MAX' : `NEXT +${upgrade?.nextLevel || UPGRADE_MAX_LEVEL}`}</div>
+            <div class="gear-upgrade-cost">${upgrade ? formatMaterialCost(upgrade.costs) : 'Potenziamento massimo raggiunto'}</div>
+          </div>
+          <button class="btn ${canUpgrade ? '' : 'ghost'}" data-upgrade-item="${item.id}" ${upgrade ? '' : 'disabled'}>${upgrade ? 'Forge' : 'MAX'}</button>
+        </div>
       </div>`;
   }).join('') : '<div class="gear-empty-state">Nessun flask trovato. Alcune special quest e alcuni boss possono sbloccarli.</div>';
 
   slotsEl.querySelectorAll('[data-unequip-slot]').forEach(btn => btn.addEventListener('click', () => unequipItem(btn.dataset.unequipSlot)));
   inventoryEl.querySelectorAll('[data-equip-item]').forEach(btn => btn.addEventListener('click', () => equipItem(btn.dataset.equipItem)));
   consumablesEl.querySelectorAll('[data-use-flask]').forEach(btn => btn.addEventListener('click', () => useFlask(btn.dataset.useFlask)));
+  [...inventoryEl.querySelectorAll('[data-upgrade-item]'), ...consumablesEl.querySelectorAll('[data-upgrade-item]')].forEach(btn => btn.addEventListener('click', () => upgradeEquipmentItem(btn.dataset.upgradeItem)));
 
   if (_gearCooldownInterval) clearInterval(_gearCooldownInterval);
   if (currentScreen === 'gear' && flaskItems.some(item => getFlaskCooldownRemaining(item.id) > 0)) {
@@ -3343,6 +3657,7 @@ function defeatBoss() {
   if (bossDrop) awardEquipment(bossDrop);
   const setUpgrade = BOSS_SET_UPGRADES[boss.id];
   if (setUpgrade) grantSetUpgrade(setUpgrade.setId, setUpgrade.bonuses, boss.name);
+  awardMaterial('BOSS_CORE', 2, boss.name);
   saveState();
 
   // Show rewards
@@ -3898,6 +4213,9 @@ function init() {
   if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
   if (!state.setUpgrades) state.setUpgrades = {};
   if (!state.flaskCooldowns) state.flaskCooldowns = {};
+  if (!state.materials) state.materials = {};
+  if (!state.equipmentUpgrades) state.equipmentUpgrades = {};
+  if (!state.codexTab) state.codexTab = 'rank';
 
   initStats();
   resetWeeklyIfNeeded();
@@ -3909,6 +4227,7 @@ function init() {
   initTimedQuestOverlay();
   if (state.onboardingDone) {
     renderStatus();
+    renderCodex();
     renderGear();
     checkAchievements();
   }

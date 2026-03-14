@@ -121,7 +121,7 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .nav-bar{position:fixed;bottom:0;left:0;right:0;z-index:9000;height:var(--nav);display:flex;align-items:center;justify-content:space-around;background:linear-gradient(180deg,var(--bg2),#08081A);border-top:1px solid var(--border);padding-bottom:var(--safe-b);backdrop-filter:blur(10px)}
 .nav-btn{display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;color:var(--text-muted);cursor:pointer;padding:8px 10px;-webkit-tap-highlight-color:transparent;transition:color .2s}
 .nav-btn svg{width:24px;height:24px}
-.nav-btn span{font-family:var(--font-m);font-size:.65rem;letter-spacing:1px}
+.nav-btn span{font-family:var(--font-m);font-size:.58rem;letter-spacing:.8px}
 .nav-btn.active{color:var(--primary)}
 .nav-btn.active span{text-shadow:0 0 8px var(--primary)}
 .boss-btn .boss-btn-inner{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,var(--secondary),var(--accent));display:flex;align-items:center;justify-content:center;font-size:1.2rem;margin-top:-14px;box-shadow:0 0 20px rgba(144,80,255,.4)}
@@ -173,6 +173,11 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .gear-set-bonuses{display:grid;gap:6px}
 .gear-set-threshold{font-family:var(--font-m);font-size:.72rem;color:var(--text-muted)}
 .gear-set-threshold.active{color:var(--primary)}
+.gear-materials-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.gear-material-card{padding:12px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.03)}
+.gear-material-name{font-family:var(--font-d);font-size:.8rem;letter-spacing:1px;margin-bottom:4px}
+.gear-material-count{font-family:var(--font-d);font-size:1.2rem;color:var(--primary)}
+.gear-material-desc{font-family:var(--font-m);font-size:.68rem;line-height:1.45;color:var(--text-muted)}
 .gear-slots-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-areas:"weapon-main helmet helmet weapon-off" "weapon-main ring-left amulet weapon-off" "gloves body body ring-right" "gloves body body boots" "belt flask-one flask-two boots";gap:10px;padding:14px;border-radius:18px;border:1px solid rgba(255,255,255,.08);background:radial-gradient(circle at top,rgba(255,255,255,.08),transparent 30%),linear-gradient(180deg,rgba(46,43,34,.48),rgba(16,16,28,.9));box-shadow:inset 0 0 40px rgba(0,0,0,.22);margin-bottom:16px}
 .gear-slot-card{padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(180deg,rgba(8,8,14,.9),rgba(24,24,34,.88));min-height:96px;display:flex;flex-direction:column;justify-content:flex-start;gap:6px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.03)}
 .gear-slot-card[data-slot="WEAPON_MAIN"]{grid-area:weapon-main;min-height:212px}
@@ -214,6 +219,10 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .gear-consumable-meta{font-family:var(--font-m);font-size:.72rem;letter-spacing:1px;color:var(--text-dim)}
 .gear-card-meta{display:flex;flex-direction:column}
 .gear-card-slot{font-family:var(--font-m);font-size:.68rem;letter-spacing:2px;color:var(--text-muted)}
+.gear-upgrade-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.06)}
+.gear-upgrade-meta{display:flex;flex-direction:column;gap:4px;min-width:0}
+.gear-upgrade-label{font-family:var(--font-m);font-size:.7rem;letter-spacing:1px;color:var(--warning)}
+.gear-upgrade-cost{font-family:var(--font-m);font-size:.66rem;line-height:1.4;color:var(--text-muted)}
 .gear-card-actions{display:flex;gap:8px;margin-top:12px}
 .gear-card-actions .btn-primary,.gear-card-actions .btn-secondary{flex:1;padding:10px 12px;font-size:.74rem}
 .gear-equipped-tag{font-family:var(--font-m);font-size:.68rem;color:var(--success);letter-spacing:1px}
@@ -278,6 +287,24 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .q-detail .q-sci{font-size:.8rem;color:var(--text-muted);font-style:italic;margin-top:6px}
 .rewards-banner{text-align:center;padding:14px;border-radius:8px;background:linear-gradient(135deg,rgba(144,80,255,.1),rgba(255,51,102,.08));border:1px solid var(--secondary);font-family:var(--font-d);font-size:.95rem;letter-spacing:1px;color:var(--text-dim)}
 .rewards-banner strong{color:var(--warning);font-size:1.1rem}
+
+/* ==================== CODEX ==================== */
+.codex-tabs{display:flex;gap:8px;overflow:auto;padding-bottom:8px;margin-bottom:14px}
+.codex-tab{flex:0 0 auto;padding:10px 12px;border-radius:999px;border:1px solid var(--border);background:rgba(255,255,255,.03);color:var(--text-dim);font-family:var(--font-m);font-size:.72rem;letter-spacing:1px;cursor:pointer}
+.codex-tab.active{border-color:rgba(0,212,255,.3);color:var(--primary);box-shadow:0 0 0 1px rgba(0,212,255,.08)}
+.codex-content{display:grid;gap:12px}
+.codex-card{padding:14px;border-radius:12px;border:1px solid var(--border);background:rgba(255,255,255,.03)}
+.codex-card-title{font-family:var(--font-d);font-size:.84rem;letter-spacing:1.5px;color:var(--primary);margin-bottom:8px}
+.codex-card-copy{font-size:.9rem;line-height:1.55;color:var(--text-dim)}
+.codex-list{display:grid;gap:8px}
+.codex-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid rgba(255,255,255,.06)}
+.codex-row:first-child{border-top:none;padding-top:0}
+.codex-row-title{font-family:var(--font-d);font-size:.78rem;letter-spacing:1px}
+.codex-row-copy{font-family:var(--font-m);font-size:.72rem;line-height:1.45;color:var(--text-muted)}
+.codex-chip-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.codex-chip{padding:4px 8px;border-radius:999px;border:1px solid rgba(0,212,255,.18);background:rgba(0,212,255,.08);font-family:var(--font-m);font-size:.66rem;color:var(--primary)}
+.quest-loot-preview{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.quest-loot-chip{padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);font-family:var(--font-m);font-size:.66rem;color:var(--text-dim)}
 
 /* ==================== BOSS ==================== */
 .boss-subview{display:none}.boss-subview.active{display:block}
@@ -393,13 +420,14 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 }
 
 @media (max-width: 640px){
+  .gear-materials-list{grid-template-columns:1fr}
   .gear-slots-grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"weapon-main weapon-off" "helmet amulet" "ring-left ring-right" "gloves body" "belt boots" "flask-one flask-two";padding:10px}
   .gear-slot-card[data-slot="WEAPON_MAIN"],.gear-slot-card[data-slot="WEAPON_OFF"],.gear-slot-card[data-slot="BODY"],.gear-slot-card[data-slot="GLOVES"],.gear-slot-card[data-slot="BOOTS"]{min-height:132px}
 }
 
 @media (max-width: 420px){
   .nav-btn{padding:8px 6px}
-  .nav-btn span{font-size:.55rem;letter-spacing:.6px}
+  .nav-btn span{font-size:.5rem;letter-spacing:.4px}
   .gear-slot-card{min-height:88px;padding:8px}
   .gear-item-name{font-size:.76rem}
   .gear-item-desc{font-size:.72rem}
