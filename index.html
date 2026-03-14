@@ -66,25 +66,7 @@
         <div class="onb-logo">⚡</div>
         <h1 class="onb-title glitch-text" data-text="NEURO-LEVELING">NEURO-LEVELING</h1>
         <p class="onb-subtitle">SISTEMA DI AUTO-OTTIMIZZAZIONE</p>
-        <p class="onb-desc">Stai per entrare nel sistema. L'assessment iniziale crea la tua build di partenza, assegna la classe e ti porta fino a un massimo di Hunter Rank 20.</p>
-        <div class="onb-guide-grid">
-          <div class="onb-guide-card">
-            <div class="onb-guide-title">MISSIONE</div>
-            <p>NEURO-LEVELING trasforma biomarcatori, allenamento, studio e recovery in un loop da videogioco: scan, quest, drop, boss e build personale.</p>
-          </div>
-          <div class="onb-guide-card">
-            <div class="onb-guide-title">HUNTER RANK</div>
-            <p>È il livello globale dell'account. Parte dall'assessment iniziale e poi sale con quest e boss. Ora è il numero principale da leggere.</p>
-          </div>
-          <div class="onb-guide-card">
-            <div class="onb-guide-title">CLASS SYNC</div>
-            <p>Misura quanto le tue stat sono allineate alla classe scelta. Non è il tuo livello principale: indica solo la forza della tua specializzazione.</p>
-          </div>
-          <div class="onb-guide-card">
-            <div class="onb-guide-title">PROGRESSIONE</div>
-            <p>Assessment iniziale fino a Rank 20, poi il salto successivo arriva solo tramite quest, boss, equip, flask e set bonus.</p>
-          </div>
-        </div>
+        <p class="onb-desc">Stai per entrare nel sistema. Una serie di assessment determinerà il tuo profilo iniziale, la tua classe e i tuoi punti base.</p>
         <div class="onb-field">
           <label class="onb-label">IL TUO NOME</label>
           <input type="text" class="onb-input" id="onbName" placeholder="Hunter..." maxlength="20" autocomplete="off" required>
@@ -274,9 +256,7 @@
 
     <nav class="nav-bar">
       <button class="nav-btn active" data-screen="status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>STATUS</span></button>
-      <button class="nav-btn" data-screen="codex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg><span>CODEX</span></button>
       <button class="nav-btn" data-screen="quests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg><span>QUEST</span></button>
-      <button class="nav-btn" data-screen="gear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4h12l2 4-8 12L4 8l2-4z"/><path d="M9 8l3 12 3-12"/></svg><span>GEAR</span></button>
       <button class="nav-btn boss-btn" data-screen="boss"><div class="boss-btn-inner">💀</div><span>BOSS</span></button>
       <button class="nav-btn" data-screen="companion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg><span>GUIDE</span></button>
       <button class="nav-btn" data-screen="assess"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span>ASSESS</span></button>
@@ -287,11 +267,10 @@
       <div class="screen-content">
         <div class="status-header">
           <div><h1 class="glitch-text player-name-lg" data-text="" id="playerNameLg"></h1><div class="player-class-badge" id="playerClassBadge"></div></div>
-          <div class="level-pill"><span class="lp-label">RANK</span><span class="lp-value" id="totalLvPill">1</span></div>
+          <div class="level-pill"><span class="lp-label">LV</span><span class="lp-value" id="totalLvPill">1</span></div>
         </div>
         <div class="player-title-bar" id="playerTitleBar">NEOPHYTE</div>
         <div class="xp-section"><div class="xp-bar-outer"><div class="xp-bar-fill" id="xpBarFill" style="width:0%"></div></div><div class="xp-text"><span id="xpCur">0</span> / <span id="xpNext">100</span> XP</div></div>
-        <div class="system-guide-card" id="systemGuideCard"></div>
         <div class="section-label">STATS PRINCIPALI</div>
         <div class="stats-list" id="statsPrimary"></div>
         <div class="section-label">STATS SECONDARIE</div>
@@ -313,20 +292,6 @@
       </div>
     </section>
 
-    <section class="screen" id="screenCodex">
-      <div class="screen-content">
-        <h1 class="screen-title glitch-text" data-text="SYSTEM CODEX">SYSTEM CODEX</h1>
-        <p class="screen-sub">Manuale del sistema: rank, stat, boss, loot table e bonus set.</p>
-        <div class="codex-tabs" id="codexTabs"></div>
-        <div class="codex-content" id="codexContent">
-          <div class="codex-card">
-            <div class="codex-card-title">BOOTING CODEX</div>
-            <div class="codex-card-copy">Il sistema sta caricando le guide operative. Se resti su questa schermata, il Codex verrà popolato con regole di Rank, missioni, boss, loot e set bonus.</div>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <!-- QUESTS -->
     <section class="screen" id="screenQuests">
       <div class="screen-content">
@@ -337,28 +302,6 @@
         <div class="quest-list" id="questList"></div>
         <div class="rewards-banner">RICOMPENSE: <strong id="totalRewXp">0 XP</strong></div>
         <div class="combo-tracker" id="comboTracker"></div>
-      </div>
-    </section>
-
-    <section class="screen" id="screenGear">
-      <div class="screen-content">
-        <h1 class="screen-title glitch-text" data-text="ARMORY">ARMORY</h1>
-        <p class="screen-sub">Loadout multi-slot in stile dungeon crawler: reliquie, armatura, ring e flasks ottenuti con missioni speciali.</p>
-        <div class="gear-power-card">
-          <div class="gear-power-label">BONUS EQUIPAGGIAMENTO</div>
-          <div class="gear-power-value" id="gearPowerValue">+0</div>
-          <div class="gear-power-desc" id="gearPowerDesc">Nessun bonus attivo</div>
-        </div>
-        <div class="gear-blueprint-list" id="gearBlueprintList"></div>
-        <div class="gear-set-list" id="gearSetList"></div>
-        <div class="section-label">MATERIALS</div>
-        <div class="gear-materials-list" id="gearMaterialsList"></div>
-        <div class="section-label">SLOT EQUIPAGGIATI</div>
-        <div class="gear-slots-grid" id="gearSlotsGrid"></div>
-        <div class="section-label">ARSENALE</div>
-        <div class="gear-inventory-list" id="gearInventoryList"></div>
-        <div class="section-label">CONSUMABLES</div>
-        <div class="gear-consumables-list" id="gearConsumablesList"></div>
       </div>
     </section>
 
@@ -418,7 +361,6 @@
   </div>
 
   <!-- TOASTS -->
-  <div class="system-popup-layer" id="systemPopupLayer"></div>
   <div class="toast-container" id="toastContainer"></div>
   <!-- OVERLAYS -->
   <div class="overlay hidden" id="levelUpOverlay"><div class="overlay-box"><div class="ov-icon">⬆</div><h2 class="ov-title glitch-text" data-text="LEVEL UP!">LEVEL UP!</h2><div class="ov-detail" id="lvlDetail"></div><button class="btn-primary" id="btnDismissLvl">CONTINUA</button></div></div>
@@ -432,15 +374,12 @@
         <h2 class="ov-title" id="tqName">Quest</h2>
         <div class="tq-mode-badge" id="tqMode">MEDIA</div>
       </div>
-      <div class="tq-desc" id="tqDesc">Descrizione missione.</div>
       <div class="tq-target" id="tqTarget">Obiettivo: 30 min</div>
-      <div class="tq-timer-display" id="tqTimerDisplay">
+      <div class="tq-timer-display">
         <div class="tq-elapsed" id="tqElapsed">00:00</div>
         <div class="tq-bonus-prev" id="tqBonusPrev">Avvia per iniziare</div>
       </div>
-      <div class="tq-checklist" id="tqChecklist"></div>
-      <div class="tq-science" id="tqScience"></div>
-      <div class="tq-hint" id="tqHint">Seleziona i passaggi eseguiti per chiudere la missione.</div>
+      <div class="tq-protocol" id="tqProtocol"></div>
       <div class="tq-actions">
         <button class="btn-primary full-w" id="btnTqStart">▶ AVVIA TIMER</button>
         <button class="btn-primary full-w hidden" id="btnTqStop">✔ COMPLETA QUEST</button>
@@ -525,16 +464,12 @@
     </div>
   </div>
 
-  <!-- SETTINGS MODAL -->
+  <!-- AI CONFIG MODAL -->
   <div class="overlay hidden" id="aiConfigModal">
     <div class="overlay-box ai-config-box">
-      <h2 class="ov-title">⚙ IMPOSTAZIONI</h2>
-      <p class="cq-hint settings-intro">Gestisci AI e sicurezza del tuo profilo.</p>
+      <h2 class="ov-title">⚙ CONFIGURAZIONE AI</h2>
+      <p class="cq-hint" style="margin:10px 0 16px;text-align:center">Inserisci la tua OpenRouter API key per attivare le risposte AI dello Shadow Guide.</p>
       <div class="cq-form">
-        <div class="settings-section">
-          <div class="settings-section-title">Shadow Guide AI</div>
-          <p class="cq-hint settings-copy">Inserisci la tua OpenRouter API key per attivare le risposte AI dello Shadow Guide. La chiave resta salvata localmente su questo dispositivo.</p>
-        </div>
         <div class="onb-field">
           <label class="onb-label">OPENROUTER API KEY</label>
           <input type="password" class="onb-input" id="aiApiKey" placeholder="sk-or-..." autocomplete="off">
@@ -553,11 +488,6 @@
           </select>
           <p class="cq-hint">Alcuni modelli sono gratuiti su OpenRouter. Vedi i prezzi sul sito.</p>
         </div>
-        <div class="settings-section settings-danger-zone">
-          <div class="settings-section-title danger">Zona Pericolosa</div>
-          <p class="cq-hint settings-copy">Resetta tutti i progressi del tuo account, inclusi assessment iniziale, livelli, quest completate, streak e boss sconfitti. L'accesso resta attivo, ma il profilo riparte da zero.</p>
-          <button class="btn-danger full-w" id="btnOpenResetAccount">RESETTA ACCOUNT</button>
-        </div>
         <div class="cq-actions">
           <button class="btn-primary full-w" id="btnSaveAiKey">SALVA</button>
           <button class="btn-danger full-w" id="btnCancelAiConfig">ANNULLA</button>
@@ -566,45 +496,8 @@
     </div>
   </div>
 
-  <div class="overlay hidden" id="resetAccountModal">
-    <div class="overlay-box ai-config-box reset-account-box">
-      <h2 class="ov-title">⚠ RESET ACCOUNT</h2>
-      <p class="cq-hint settings-intro">Operazione irreversibile. Per confermare digita l'email del tuo account.</p>
-      <div class="cq-form">
-        <div class="settings-warning-card">
-          <div class="settings-warning-title">Verranno azzerati</div>
-          <p class="settings-warning-list">Classe iniziale, livelli, statistiche, quest, streak, boss, assessment, inventario e progressi salvati nel cloud.</p>
-        </div>
-        <div class="onb-field">
-          <label class="onb-label">EMAIL DI CONFERMA</label>
-          <input type="text" class="onb-input" id="resetAccountConfirmInput" placeholder="nome@dominio.com" autocomplete="off">
-          <p class="cq-hint">Digita esattamente: <span id="resetAccountExpected"></span></p>
-        </div>
-        <div class="cq-actions">
-          <button class="btn-danger full-w" id="btnConfirmResetAccount" disabled>CONFERMA RESET</button>
-          <button class="btn-secondary full-w" id="btnCancelResetAccount">ANNULLA</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Mostra subito l'app dal localStorage senza aspettare Supabase -->
-  <script>
-  try {
-    var _s = localStorage.getItem('neuro_leveling_v2');
-    if (_s) {
-      var _p = JSON.parse(_s);
-      if (_p && _p.onboardingDone) {
-        document.getElementById('loginScreen').classList.add('hidden');
-        document.getElementById('onboarding').classList.add('hidden');
-        document.getElementById('mainApp').classList.remove('hidden');
-      }
-    }
-  } catch(e) {}
-  </script>
-
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="supabase-config.js?v=21"></script>
-  <script src="app.js?v=21"></script>
+  <script src="supabase-config.js?v=10"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>
