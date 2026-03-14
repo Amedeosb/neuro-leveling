@@ -309,12 +309,13 @@
     <section class="screen" id="screenGear">
       <div class="screen-content">
         <h1 class="screen-title glitch-text" data-text="ARMORY">ARMORY</h1>
-        <p class="screen-sub">Equipaggiamento ottenuto tramite quest speciali e ricompense rare.</p>
+        <p class="screen-sub">Loadout multi-slot in stile dungeon crawler: reliquie, armatura, ring e flasks ottenuti con missioni speciali.</p>
         <div class="gear-power-card">
           <div class="gear-power-label">BONUS EQUIPAGGIAMENTO</div>
           <div class="gear-power-value" id="gearPowerValue">+0</div>
           <div class="gear-power-desc" id="gearPowerDesc">Nessun bonus attivo</div>
         </div>
+        <div class="gear-set-list" id="gearSetList"></div>
         <div class="section-label">SLOT EQUIPAGGIATI</div>
         <div class="gear-slots-grid" id="gearSlotsGrid"></div>
         <div class="section-label">ARSENALE</div>
@@ -490,7 +491,7 @@
       <div class="cq-form">
         <div class="settings-section">
           <div class="settings-section-title">Shadow Guide AI</div>
-          <p class="cq-hint settings-copy">Inserisci la tua OpenRouter API key per attivare le risposte AI dello Shadow Guide.</p>
+          <p class="cq-hint settings-copy">Inserisci la tua OpenRouter API key per attivare le risposte AI dello Shadow Guide. La chiave resta salvata localmente su questo dispositivo.</p>
         </div>
         <div class="onb-field">
           <label class="onb-label">OPENROUTER API KEY</label>

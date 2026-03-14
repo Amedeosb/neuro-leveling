@@ -13,6 +13,8 @@ const STORAGE_KEY = 'neuro_leveling_v2';
 let currentScreen = 'status';
 let _systemPopupInterval = null;
 let _lastSystemPopupAt = 0;
+let _systemAudioContext = null;
+let _systemAudioUnlocked = false;
 const _domReadyPromise = document.readyState === 'loading'
   ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
   : Promise.resolve();
@@ -405,6 +407,8 @@ async function bootstrapAuth() {
 document.addEventListener('DOMContentLoaded', () => {
   syncAppChromeMetrics();
   window.addEventListener('resize', syncAppChromeMetrics);
+  window.addEventListener('pointerdown', unlockSystemAudio, { once: true });
+  window.addEventListener('keydown', unlockSystemAudio, { once: true });
 
   // 1. SEMPRE init() subito con i dati locali (state è già caricato da loadState())
   if (state.onboardingDone) {
@@ -881,82 +885,224 @@ const BUFF_CATALOG = {
   STAT_CRYSTAL:  { name:'Cristallo Stat',  icon:'✨', desc:'+15 XP stat random',  durType:'instant', effect:'instantXP', value:15 },
 };
 
+const EQUIPMENT_SLOTS = [
+  'WEAPON_MAIN',
+  'HELMET',
+  'WEAPON_OFF',
+  'AMULET',
+  'RING_LEFT',
+  'BODY',
+  'RING_RIGHT',
+  'GLOVES',
+  'BELT',
+  'BOOTS',
+  'FLASK_ONE',
+  'FLASK_TWO',
+];
+
 const EQUIPMENT_SLOT_LABELS = {
-  WEAPON: 'ARMA',
-  HEAD: 'ELMO',
-  CHEST: 'TORSO',
-  ACCESSORY: 'ACCESSORIO',
+  WEAPON_MAIN: 'WEAPON I',
+  HELMET: 'HELMET',
+  WEAPON_OFF: 'WEAPON II',
+  AMULET: 'AMULET',
+  RING_LEFT: 'RING I',
+  BODY: 'BODY ARMOUR',
+  RING_RIGHT: 'RING II',
+  GLOVES: 'GLOVES',
+  BELT: 'BELT',
+  BOOTS: 'BOOTS',
+  FLASK_ONE: 'FLASK I',
+  FLASK_TWO: 'FLASK II',
 };
 
-const EQUIPMENT_CATALOG = {
-  SHADOW_DAGGER: {
-    id: 'SHADOW_DAGGER',
-    slot: 'WEAPON',
-    name: 'Shadow Dagger',
-    icon: '🗡️',
-    rarity: 'EPIC',
-    desc: 'Lama ottenuta nella prova d\'ombra. Amplifica precisione e volonta in combattimento.',
-    bonuses: { AGI: 2, WIL: 1 },
+const EQUIPMENT_SET_BONUSES = {
+  SHADOWFORGED: {
+    name: 'Shadowforged Hunt',
+    icon: '🌑',
+    thresholds: {
+      2: { AGI: 1, FOC: 1 },
+      4: { WIL: 1 },
+    },
   },
-  MONARCH_VISOR: {
-    id: 'MONARCH_VISOR',
-    slot: 'HEAD',
-    name: 'Monarch Visor',
+  MONARCH_SYNTH: {
+    name: 'Monarch Synthesis',
     icon: '👁',
-    rarity: 'LEGENDARY',
-    desc: 'Visore tattico per leggere pattern e priorita del sistema in tempo reale.',
-    bonuses: { INT: 2, FOC: 1 },
+    thresholds: {
+      2: { INT: 1, CHA: 1 },
+      4: { FOC: 1, EMP: 1 },
+    },
   },
-  IRON_HEART_ARMOR: {
-    id: 'IRON_HEART_ARMOR',
-    slot: 'CHEST',
-    name: 'Iron Heart Armor',
+  IRON_HEART: {
+    name: 'Iron Heart Frame',
     icon: '🛡️',
-    rarity: 'EPIC',
-    desc: 'Corazza da training che stabilizza il sistema sotto carico e migliora la tenuta.',
-    bonuses: { RES: 2, STR: 1 },
+    thresholds: {
+      2: { RES: 1, VIT: 1 },
+      4: { STR: 1, VAG: 1 },
+    },
   },
-  VAGAL_SIGIL: {
-    id: 'VAGAL_SIGIL',
-    slot: 'ACCESSORY',
-    name: 'Vagal Sigil',
-    icon: '🔷',
-    rarity: 'RARE',
-    desc: 'Sigillo di regolazione che migliora calma, empatia e recupero.',
-    bonuses: { VAG: 2, CHA: 1 },
+};
+
+function createEmptyGearSlots() {
+  return Object.fromEntries(EQUIPMENT_SLOTS.map(slot => [slot, null]));
+}
+
+const EQUIPMENT_CATALOG = {
+  SHADOW_RECURVE: {
+    id: 'SHADOW_RECURVE', slot: 'WEAPON_MAIN', set: 'SHADOWFORGED', name: 'Shadow Recurve', icon: '🏹', rarity: 'EPIC',
+    desc: 'Arco da caccia neurale. Trasforma attenzione e timing in esecuzione pulita.', bonuses: { AGI: 2, WIL: 1 },
+  },
+  QUIVER_ZERO: {
+    id: 'QUIVER_ZERO', slot: 'WEAPON_OFF', set: 'SHADOWFORGED', name: 'Quiver Zero', icon: '🪶', rarity: 'RARE',
+    desc: 'Faretra tattica con assetto minimal. Riduce attrito cognitivo e migliora precisione.', bonuses: { FOC: 1, AGI: 1, DIS: 1 },
+  },
+  MONARCH_HELM: {
+    id: 'MONARCH_HELM', slot: 'HELMET', set: 'MONARCH_SYNTH', name: 'Monarch Helm', icon: '👑', rarity: 'LEGENDARY',
+    desc: 'Interfaccia da comando che amplifica lettura di pattern e decisione fredda.', bonuses: { INT: 2, FOC: 1 },
+  },
+  VAGAL_AMULET: {
+    id: 'VAGAL_AMULET', slot: 'AMULET', set: 'MONARCH_SYNTH', name: 'Vagal Amulet', icon: '📿', rarity: 'EPIC',
+    desc: 'Amuleto di recovery che stabilizza il sistema prima di un fight mentale.', bonuses: { VAG: 2, EMP: 1 },
+  },
+  LUCID_RING_ALPHA: {
+    id: 'LUCID_RING_ALPHA', slot: 'RING_LEFT', set: 'MONARCH_SYNTH', name: 'Lucid Ring Alpha', icon: '💍', rarity: 'RARE',
+    desc: 'Anello per compressione del rumore mentale. Utile nei dungeon cognitivi.', bonuses: { INT: 1, CHA: 1 },
+  },
+  CO2_LOOP: {
+    id: 'CO2_LOOP', slot: 'RING_RIGHT', set: 'MONARCH_SYNTH', name: 'CO2 Loop', icon: '🫧', rarity: 'RARE',
+    desc: 'Circuito per addestrare la calma sotto pressione respiratoria.', bonuses: { CO2: 2, VAG: 1 },
+  },
+  IRON_HEART_CUIRASS: {
+    id: 'IRON_HEART_CUIRASS', slot: 'BODY', set: 'IRON_HEART', name: 'Iron Heart Cuirass', icon: '🦺', rarity: 'EPIC',
+    desc: 'Corazza per tenuta strutturale, postura e resilienza sotto carico.', bonuses: { RES: 2, STR: 2 },
+  },
+  GRIP_PROTOCOL: {
+    id: 'GRIP_PROTOCOL', slot: 'GLOVES', set: 'SHADOWFORGED', name: 'Grip Protocol Gloves', icon: '🧤', rarity: 'RARE',
+    desc: 'Guanti da esecuzione fine: mani calme, output veloce, minore dispersione.', bonuses: { FOC: 1, AGI: 1, STR: 1 },
+  },
+  CORE_BIND: {
+    id: 'CORE_BIND', slot: 'BELT', set: 'IRON_HEART', name: 'Core Bind Belt', icon: '🪢', rarity: 'EPIC',
+    desc: 'Cintura di compressione centrale. Migliora brace, volonta e stabilita.', bonuses: { WIL: 1, RES: 1, VIT: 1 },
+  },
+  STALKER_BOOTS: {
+    id: 'STALKER_BOOTS', slot: 'BOOTS', set: 'SHADOWFORGED', name: 'Stalker Boots', icon: '🥾', rarity: 'EPIC',
+    desc: 'Stivali per spostamenti puliti e rapidi. Il pavimento diventa un radar.', bonuses: { AGI: 2, ADA: 1 },
+  },
+  CRIMSON_FLASK: {
+    id: 'CRIMSON_FLASK', slot: 'FLASK_ONE', set: 'IRON_HEART', name: 'Crimson Flask', icon: '🧪', rarity: 'RARE',
+    desc: 'Flask da recovery rosso. Innalza vitalita operativa e capacity di recupero.', bonuses: { VIT: 2, RES: 1 },
+  },
+  AZURE_FLASK: {
+    id: 'AZURE_FLASK', slot: 'FLASK_TWO', set: 'IRON_HEART', name: 'Azure Flask', icon: '🧴', rarity: 'RARE',
+    desc: 'Flask blu da focus e regolazione. Ideale prima dei raid cognitivi.', bonuses: { FOC: 1, VAG: 1, DIS: 1 },
   },
 };
 
 const SPECIAL_QUESTS = [
   {
-    id:'shadow_trial', name:'Trial of the Shadow Blade', desc:'Missione speciale per ottenere un\'arma d\'ombra e affinare l\'agilita operativa.',
+    id:'shadow_recurve_trial', name:'Shadow Recurve Trial', desc:'Raid atletico per sbloccare l\'arco principale della build.',
     type:'SPECIAL', cat:'PHYSIQUE', diff:8, dur:35, req:[{ stat:'AGI', minLv:4 },{ stat:'WIL', minLv:4 }], timed:true,
-    rewards:[{ stat:'AGI', xp:70 },{ stat:'WIL', xp:40 }],
-    protocol:['Riscaldamento rapido 5 min','20 min di footwork o sprint tecnici','5 min di coordinazione fine sotto fatica','Debrief scritto: 3 errori, 3 correzioni'],
-    science:'Le prove motorie sotto stress consolidano controllo, time pressure e adattabilita neurale.', icon:'🗡️', equipmentId:'SHADOW_DAGGER'
+    rewards:[{ stat:'AGI', xp:70 },{ stat:'WIL', xp:45 }],
+    protocol:['5 min warm-up rapido','20 min sprint tecnici o footwork','3 set di precision drill','Log finale: 3 errori, 3 fix'],
+    science:'Timing motorio e pressione moderata rinforzano accuratezza e controllo esecutivo.', icon:'🏹', equipmentId:'SHADOW_RECURVE'
   },
   {
-    id:'visor_protocol', name:'Monarch Vision Protocol', desc:'Quest speciale cognitiva per ottenere il visore del monarca.',
-    type:'SPECIAL', cat:'COGNITIVE', diff:8, dur:45, req:[{ stat:'INT', minLv:5 },{ stat:'FOC', minLv:4 }], timed:true,
-    rewards:[{ stat:'INT', xp:75 },{ stat:'FOC', xp:45 }],
-    protocol:['Blocca 45 min di deep work','Risolve un problema ad alta complessita','Annota 5 pattern ricorrenti','Chiudi con 3 decisioni operative nette'],
-    science:'Il lavoro cognitivo prolungato migliora filtro attentivo e riconoscimento di pattern ad alto livello.', icon:'👁', equipmentId:'MONARCH_VISOR'
+    id:'quiver_zero_protocol', name:'Quiver Zero Protocol', desc:'Protocollo di ordine e precisione per la seconda arma tattica.',
+    type:'SPECIAL', cat:'COGNITIVE', diff:6, dur:28, req:[{ stat:'FOC', minLv:3 },{ stat:'DIS', minLv:3 }], timed:false,
+    rewards:[{ stat:'FOC', xp:55 },{ stat:'DIS', xp:45 }],
+    protocol:['Reset del workspace','25 min task singolo senza alt-tab','2 min review sulle distrazioni','Chiudi con checklist minima'],
+    science:'Ridurre switching cost abbassa rumore cognitivo e migliora performance sostenuta.', icon:'🪶', equipmentId:'QUIVER_ZERO'
   },
   {
-    id:'iron_heart_forge', name:'Forge of Iron Heart', desc:'Quest speciale fisica per sbloccare una corazza che aumenta la tenuta.',
+    id:'monarch_helm_scan', name:'Monarch Helm Scan', desc:'Dungeon di deep work per sbloccare il casco da comando.',
+    type:'SPECIAL', cat:'COGNITIVE', diff:9, dur:45, req:[{ stat:'INT', minLv:5 },{ stat:'FOC', minLv:4 }], timed:true,
+    rewards:[{ stat:'INT', xp:80 },{ stat:'FOC', xp:50 }],
+    protocol:['45 min deep work blindato','1 problema difficile risolto','5 pattern estratti','3 decisioni tattiche nette'],
+    science:'Il focus prolungato potenzia controllo top-down e pattern recognition.', icon:'👑', equipmentId:'MONARCH_HELM'
+  },
+  {
+    id:'vagal_amulet_recovery', name:'Vagal Amulet Recovery', desc:'Recovery run per ottenere l\'amuleto di regolazione.',
+    type:'SPECIAL', cat:'SOCIAL', diff:7, dur:24, req:[{ stat:'VAG', minLv:4 },{ stat:'EMP', minLv:3 }], timed:false,
+    rewards:[{ stat:'VAG', xp:65 },{ stat:'EMP', xp:45 }],
+    protocol:['6 min box breathing','2 min splash freddo viso','1 contatto umano regolato','2 min journaling sul tono'],
+    science:'Respirazione, cold face exposure e co-regolazione migliorano flessibilita autonomica.', icon:'📿', equipmentId:'VAGAL_AMULET'
+  },
+  {
+    id:'lucid_ring_alpha', name:'Lucid Ring Alpha', desc:'Micro-raid sociale per guadagnare un anello di chiarezza.',
+    type:'SPECIAL', cat:'SOCIAL', diff:6, dur:20, req:[{ stat:'CHA', minLv:3 },{ stat:'INT', minLv:3 }], timed:false,
+    rewards:[{ stat:'CHA', xp:50 },{ stat:'INT', xp:40 }],
+    protocol:['Invia un messaggio ad alta chiarezza','Fai una domanda diretta','Evita filler per 10 min','Annota outcome e risposta'],
+    science:'La chiarezza espressiva riduce carico sociale e aumenta agency comunicativa.', icon:'💍', equipmentId:'LUCID_RING_ALPHA'
+  },
+  {
+    id:'co2_loop_dive', name:'CO2 Loop Dive', desc:'Sfida respiratoria controllata per il secondo anello.',
+    type:'SPECIAL', cat:'NEURAL', diff:7, dur:22, req:[{ stat:'CO2', minLv:4 },{ stat:'VAG', minLv:3 }], timed:false,
+    rewards:[{ stat:'CO2', xp:60 },{ stat:'VAG', xp:40 }],
+    protocol:['5 round di espirazioni lunghe','2 hold in sicurezza','Camminata nasale 8 min','Annota calma percepita'],
+    science:'Allenare la tolleranza alla CO2 migliora controllo autonomico e stabilita soggettiva.', icon:'🫧', equipmentId:'CO2_LOOP'
+  },
+  {
+    id:'iron_heart_forge', name:'Forge of Iron Heart', desc:'Quest pesante per forgiare il body armour principale.',
     type:'SPECIAL', cat:'PHYSIQUE', diff:9, dur:50, req:[{ stat:'STR', minLv:5 },{ stat:'RES', minLv:5 }], timed:true,
-    rewards:[{ stat:'STR', xp:80 },{ stat:'RES', xp:50 }],
-    protocol:['Circuito forza-resistenza 30 min','Carry o plank isometrici finali','Respirazione diaframmatica 5 min','Log del livello di sforzo'],
-    science:'Le prove miste forza-resistenza aumentano resilienza periferica e tolleranza al carico.', icon:'🛡️', equipmentId:'IRON_HEART_ARMOR'
+    rewards:[{ stat:'STR', xp:85 },{ stat:'RES', xp:55 }],
+    protocol:['Circuito forza-resistenza 30 min','Carry o plank finali','5 min nasal cooldown','Log del carico percepito'],
+    science:'Le prove miste forza-resistenza aumentano robustezza periferica e tolleranza al carico.', icon:'🦺', equipmentId:'IRON_HEART_CUIRASS'
   },
   {
-    id:'vagal_relic', name:'Relic of Calm Signal', desc:'Quest speciale di recupero per ottenere un accessorio di regolazione nervosa.',
-    type:'SPECIAL', cat:'SOCIAL', diff:7, dur:25, req:[{ stat:'VAG', minLv:4 },{ stat:'CHA', minLv:3 }], timed:false,
-    rewards:[{ stat:'VAG', xp:65 },{ stat:'CHA', xp:35 }],
-    protocol:['10 min box breathing','2 min cold splash viso','1 contatto sociale consapevole','2 min journaling sulla regolazione'],
-    science:'La combinazione di respiro, vagal tone e co-regolazione migliora flessibilita autonomica.', icon:'🔷', equipmentId:'VAGAL_SIGIL'
+    id:'grip_protocol_gloves', name:'Grip Protocol Gloves', desc:'Missione fine-motoria per sbloccare i guanti da esecuzione.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:7, dur:26, req:[{ stat:'AGI', minLv:4 },{ stat:'FOC', minLv:3 }], timed:true,
+    rewards:[{ stat:'AGI', xp:60 },{ stat:'FOC', xp:45 }],
+    protocol:['10 min coordination drill','3 set hand-grip o hang leggero','5 min task di precisione','Review del tremore/controllo'],
+    science:'La precisione manuale sotto lieve fatica migliora controllo neuromotorio.', icon:'🧤', equipmentId:'GRIP_PROTOCOL'
+  },
+  {
+    id:'core_bind_belt', name:'Core Bind Belt', desc:'Raid posturale per cintura e stabilita centrale.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:8, dur:30, req:[{ stat:'RES', minLv:4 },{ stat:'VIT', minLv:3 }], timed:false,
+    rewards:[{ stat:'RES', xp:60 },{ stat:'VIT', xp:45 }],
+    protocol:['10 min core control','3 set carry o hollow hold','2 min posture reset','Nota su energia post-task'],
+    science:'La stabilita del tronco riduce costo energetico e migliora resilienza meccanica.', icon:'🪢', equipmentId:'CORE_BIND'
+  },
+  {
+    id:'stalker_boots_run', name:'Stalker Boots Run', desc:'Sprint stealth per ottenere gli stivali da mobilita.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:8, dur:32, req:[{ stat:'AGI', minLv:5 },{ stat:'ADA', minLv:3 }], timed:true,
+    rewards:[{ stat:'AGI', xp:70 },{ stat:'ADA', xp:40 }],
+    protocol:['Interval run 20 min','3 cambi ritmo controllati','2 min cooldown nasale','Debrief sulla fluidita'],
+    science:'Cambio di ritmo e adattamento rapido migliorano efficienza locomotoria.', icon:'🥾', equipmentId:'STALKER_BOOTS'
+  },
+  {
+    id:'crimson_flask_brew', name:'Crimson Flask Brew', desc:'Protocollo recovery per il primo flask.',
+    type:'SPECIAL', cat:'NEURAL', diff:6, dur:18, req:[{ stat:'VIT', minLv:3 },{ stat:'RES', minLv:3 }], timed:false,
+    rewards:[{ stat:'VIT', xp:50 },{ stat:'RES', xp:35 }],
+    protocol:['Hydration check','5 min camminata lenta','3 min breathing downshift','Nota sulla percezione di recupero'],
+    science:'Recovery attivo e idratazione migliorano disponibilita energetica e recupero.', icon:'🧪', equipmentId:'CRIMSON_FLASK'
+  },
+  {
+    id:'azure_flask_sync', name:'Azure Flask Sync', desc:'Setup mentale rapido per il flask blu da focus.',
+    type:'SPECIAL', cat:'COGNITIVE', diff:6, dur:18, req:[{ stat:'FOC', minLv:3 },{ stat:'VAG', minLv:3 }], timed:false,
+    rewards:[{ stat:'FOC', xp:50 },{ stat:'VAG', xp:35 }],
+    protocol:['2 min respiro 4-6','12 min task single-target','1 min reset schermo spento','Chiudi con obiettivo unico'],
+    science:'La modulazione respiratoria prima del focus riduce rumore e aumenta stabilita attentiva.', icon:'🧴', equipmentId:'AZURE_FLASK'
   },
 ];
+
+const LEGACY_EQUIPMENT_ID_MAP = {
+  SHADOW_DAGGER: 'SHADOW_RECURVE',
+  MONARCH_VISOR: 'MONARCH_HELM',
+  IRON_HEART_ARMOR: 'IRON_HEART_CUIRASS',
+  VAGAL_SIGIL: 'VAGAL_AMULET',
+};
+
+const LEGACY_SPECIAL_QUEST_MAP = {
+  shadow_trial: 'shadow_recurve_trial',
+  visor_protocol: 'monarch_helm_scan',
+  vagal_relic: 'vagal_amulet_recovery',
+};
+
+const LEGACY_SLOT_MAP = {
+  WEAPON: 'WEAPON_MAIN',
+  HEAD: 'HELMET',
+  CHEST: 'BODY',
+  ACCESSORY: 'AMULET',
+};
 
 // ========================
 // FACTIONS
@@ -1033,7 +1179,7 @@ const DEFAULT_STATE = {
   questTab: 'corpo',
   customQuests: [],
   ownedEquipment: [],
-  equippedGear: { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null },
+  equippedGear: createEmptyGearSlots(),
   specialQuestCompleted: [],
 };
 
@@ -1067,10 +1213,45 @@ function getStatLv(id) { return state.stats[id]?.lv ?? 1; }
 
 function getEquipmentBonusForStat(statId) {
   const equipped = state.equippedGear || {};
-  return Object.values(equipped).reduce((sum, itemId) => {
+  const itemBonus = Object.values(equipped).reduce((sum, itemId) => {
     if (!itemId) return sum;
     const item = EQUIPMENT_CATALOG[itemId];
     return sum + (item?.bonuses?.[statId] || 0);
+  }, 0);
+  return itemBonus + getSetBonusForStat(statId);
+}
+
+function getEquippedSetCounts() {
+  return Object.values(state.equippedGear || {}).reduce((acc, itemId) => {
+    const setId = itemId ? EQUIPMENT_CATALOG[itemId]?.set : null;
+    if (!setId) return acc;
+    acc[setId] = (acc[setId] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function getActiveSetBonuses() {
+  const counts = getEquippedSetCounts();
+  return Object.entries(counts).map(([setId, count]) => {
+    const setDef = EQUIPMENT_SET_BONUSES[setId];
+    if (!setDef) return null;
+    const activeThresholds = Object.keys(setDef.thresholds)
+      .map(Number)
+      .filter(threshold => count >= threshold)
+      .sort((a, b) => a - b);
+    if (!activeThresholds.length) return null;
+    return {
+      setId,
+      count,
+      setDef,
+      bonuses: activeThresholds.map(threshold => ({ threshold, stats: setDef.thresholds[threshold] })),
+    };
+  }).filter(Boolean);
+}
+
+function getSetBonusForStat(statId) {
+  return getActiveSetBonuses().reduce((sum, bonus) => {
+    return sum + bonus.bonuses.reduce((inner, thresholdBonus) => inner + (thresholdBonus.stats[statId] || 0), 0);
   }, 0);
 }
 
@@ -1125,7 +1306,10 @@ function meetsReq(reqs) {
 }
 
 function getOwnedEquipmentItems() {
-  return (state.ownedEquipment || []).map(id => EQUIPMENT_CATALOG[id]).filter(Boolean);
+  return (state.ownedEquipment || [])
+    .map(id => EQUIPMENT_CATALOG[id])
+    .filter(Boolean)
+    .sort((a, b) => EQUIPMENT_SLOTS.indexOf(a.slot) - EQUIPMENT_SLOTS.indexOf(b.slot));
 }
 
 function getEquippedItem(slot) {
@@ -1137,7 +1321,7 @@ function equipItem(itemId) {
   const item = EQUIPMENT_CATALOG[itemId];
   if (!item) return;
   if (!state.ownedEquipment?.includes(itemId)) return;
-  if (!state.equippedGear) state.equippedGear = { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null };
+  if (!state.equippedGear) state.equippedGear = createEmptyGearSlots();
   state.equippedGear[item.slot] = itemId;
   saveState();
   renderGear();
@@ -1159,14 +1343,15 @@ function awardEquipment(itemId) {
   if (!state.ownedEquipment) state.ownedEquipment = [];
   if (state.ownedEquipment.includes(itemId)) return;
   state.ownedEquipment.push(itemId);
-  if (!state.equippedGear) state.equippedGear = { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null };
+  if (!state.equippedGear) state.equippedGear = createEmptyGearSlots();
   if (!state.equippedGear[item.slot]) state.equippedGear[item.slot] = itemId;
   showToast(`${item.icon} Equip ottenuto: ${item.name}`, 'levelup');
   showSystemPopup({
     tone: 'reward',
     badge: 'GEAR',
-    title: 'EQUIPAGGIAMENTO OTTENUTO',
-    body: `${item.name} acquisito. Bonus: ${Object.entries(item.bonuses).map(([stat,val]) => `+${val} ${stat}`).join(' · ')}.`,
+    title: 'RELIQUIA ACQUISITA',
+    body: `${item.name} agganciato al loadout. Bonus attivi: ${Object.entries(item.bonuses).map(([stat,val]) => `+${val} ${stat}`).join(' · ')}. Controlla l'Armory per slot, set e stat aggiunte.`,
+    sound: 'reward',
   });
 }
 
@@ -1519,8 +1704,10 @@ function buildSystemPrompt() {
   const bossesDefeated = (state.bossesDefeated || []).length;
 
   return `Sei lo SHADOW GUIDE, un consulente neuro-tattico dentro un'app di gamification chiamata NEURO-LEVELING (ispirata a Solo Leveling).
-Rispondi SEMPRE in italiano. Sii conciso, diretto, motivante e in tema col gioco. Usa il tono di un mentore misterioso e saggio.
+Rispondi SEMPRE in italiano. Sii conciso, diretto, nerd e in tema col gioco. Usa il tono di un mentore da videogame dark-fantasy che pero sa davvero leggere biomarcatori, stress e performance.
 Non usare emoji in eccesso. Max 2-3 frasi per risposta tranne se l'utente chiede spiegazioni dettagliate.
+Mescola linguaggio scientifico e linguaggio da sistema di progressione: quest, build, raid, debuff, cooldown, scan, loadout, dungeon, boss.
+Evita frasi corporate o troppo adulte: la sensazione deve essere da sistema urgente, misterioso e coinvolgente, non da coach generico.
 
 CONTESTO GIOCATORE:
 - Nome: ${state.playerName || 'Hunter'}
@@ -1542,7 +1729,8 @@ COMPETENZE:
 - Motivazione, discipline, gestione dello stress
 - Consigli su quest, boss, stat, progressione nel gioco
 
-Rispondi alle domande del giocatore con consigli personalizzati basati sul suo profilo.`;
+Rispondi alle domande del giocatore con consigli personalizzati basati sul suo profilo.
+Quando suggerisci una mossa, rendila concreta e giocabile oggi, come se stessi assegnando il prossimo step di una build.`;
 }
 
 async function companionReplyAI(msg) {
@@ -1871,6 +2059,38 @@ function showToast(msg, type='success') {
   setTimeout(() => t.remove(), 3200);
 }
 
+function unlockSystemAudio() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  if (!_systemAudioContext) _systemAudioContext = new AudioCtx();
+  if (_systemAudioContext.state === 'suspended') _systemAudioContext.resume();
+  _systemAudioUnlocked = true;
+}
+
+function playSystemAlertSound(level='soft') {
+  if (!_systemAudioUnlocked) return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  if (!_systemAudioContext) _systemAudioContext = new AudioCtx();
+  const ctx = _systemAudioContext;
+  const now = ctx.currentTime;
+  const notes = level === 'urgent' ? [220, 330, 220, 440] : level === 'reward' ? [392, 494, 587] : [330, 392];
+
+  notes.forEach((freq, index) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = level === 'urgent' ? 'sawtooth' : 'triangle';
+    osc.frequency.setValueAtTime(freq, now + index * 0.09);
+    gain.gain.setValueAtTime(0.0001, now + index * 0.09);
+    gain.gain.exponentialRampToValueAtTime(level === 'urgent' ? 0.06 : 0.04, now + index * 0.09 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.09 + 0.16);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + index * 0.09);
+    osc.stop(now + index * 0.09 + 0.18);
+  });
+}
+
 function ensureSystemPopupLoop() {
   if (_systemPopupInterval) return;
   _systemPopupInterval = setInterval(() => {
@@ -1884,13 +2104,13 @@ function removeSystemPopup(node) {
   setTimeout(() => node.remove(), 240);
 }
 
-function showSystemPopup({ title, body, tone='info', badge='SYSTEM' }) {
+function showSystemPopup({ title, body, tone='info', badge='SYSTEM', urgent=false, sound=null }) {
   const layer = $('systemPopupLayer');
   if (!layer) return;
   _lastSystemPopupAt = Date.now();
 
   const popup = document.createElement('div');
-  popup.className = `system-popup ${tone}`;
+  popup.className = `system-popup ${tone} ${urgent ? 'urgent' : ''}`;
   popup.innerHTML = `
     <button class="system-popup-close" aria-label="Chiudi">✕</button>
     <div class="system-popup-header">
@@ -1900,10 +2120,12 @@ function showSystemPopup({ title, body, tone='info', badge='SYSTEM' }) {
     <div class="system-popup-body">${body}</div>
   `;
   layer.prepend(popup);
+  if (urgent) triggerGlitch();
+  if (sound) playSystemAlertSound(sound);
 
   const closeBtn = popup.querySelector('.system-popup-close');
   if (closeBtn) closeBtn.addEventListener('click', () => removeSystemPopup(popup));
-  setTimeout(() => removeSystemPopup(popup), 7200);
+  setTimeout(() => removeSystemPopup(popup), urgent ? 9200 : 7200);
 }
 
 function getSystemPopupCandidates() {
@@ -1915,9 +2137,11 @@ function getSystemPopupCandidates() {
   if ((!state.lastAssessmentDate || state.lastAssessmentDate !== today) && currentScreen !== 'assess') {
     candidates.push({
       tone: 'warning',
-      badge: 'ALERT',
-      title: 'ASSESSMENT RICHIESTO',
-      body: 'Esegui la valutazione giornaliera per ottenere quest e consigli piu accurati.',
+      badge: 'SYSTEM ALERT',
+      title: 'SCAN GIORNALIERO MANCANTE',
+      body: 'Il Quest Board e in modalita approssimativa. Avvia subito l\'assessment per riallineare biomarcatori, danger rating e drop consigliati.',
+      urgent: true,
+      sound: 'urgent',
     });
   }
 
@@ -1925,8 +2149,10 @@ function getSystemPopupCandidates() {
     candidates.push({
       tone: 'warning',
       badge: 'WARNING',
-      title: 'DEBUFF ATTIVI',
-      body: `Sono presenti ${activeDebuffs.length} debuff. Priorita a recovery, respirazione e reset vagale.`,
+      title: 'DEBUFF HOSTILI RILEVATI',
+      body: `Sono attivi ${activeDebuffs.length} debuff. Priorita assoluta a recovery, respirazione e reset vagale prima di forzare un raid difficile.`,
+      urgent: true,
+      sound: 'urgent',
     });
   }
 
@@ -1934,9 +2160,10 @@ function getSystemPopupCandidates() {
     const nextQuest = currentQuests[0];
     candidates.push({
       tone: 'info',
-      badge: 'QUEST',
-      title: 'MISSIONE RACCOMANDATA',
-      body: `${nextQuest.icon} ${nextQuest.name} e pronta nel board. Difficolta ${nextQuest.diff}/10.`,
+      badge: 'QUEST FEED',
+      title: 'MISSIONE PRIORITARIA DISPONIBILE',
+      body: `${nextQuest.icon} ${nextQuest.name} e in coda nel board. Rating di minaccia ${nextQuest.diff}/10. Entraci ora e capitalizza il momentum.`,
+      sound: 'soft',
     });
   }
 
@@ -1944,8 +2171,9 @@ function getSystemPopupCandidates() {
     candidates.push({
       tone: 'reward',
       badge: 'CHAIN',
-      title: 'RITMO DI CACCIA ELEVATO',
-      body: `Hai completato ${completedToday} quest oggi. Mantieni il momentum per streak e combo.`,
+      title: 'COMBO WINDOW APERTA',
+      body: `Hai completato ${completedToday} quest oggi. Momentum alto: continua il run per stackare streak, combo e possibili drop.`,
+      sound: 'reward',
     });
   }
 
@@ -1954,7 +2182,7 @@ function getSystemPopupCandidates() {
       tone: 'info',
       badge: 'BOSS',
       title: 'BOSS CHAMBER BLOCCATA',
-      body: 'Accumula livelli e quest chiave per sbloccare il primo boss della camera.',
+      body: 'La camera del boss non ti riconosce ancora come minaccia. Farma livelli, gear e quest chiave per forzare l\'ingresso.',
     });
   }
 
@@ -2613,7 +2841,8 @@ function completeQuest(quest, mode, timeBonus) {
     tone: 'reward',
     badge: 'SYSTEM',
     title: 'QUEST CLEAR',
-    body: 'Quest completata. Il Quest Board ha gia allocato la prossima missione disponibile.',
+    body: 'Missione completata. Il sistema ha aggiornato XP, streak, drop e priorita del Quest Board.',
+    sound: 'reward',
   });
 }
 
@@ -2621,40 +2850,63 @@ function getTotalGearPower() {
   return Object.keys(STAT_META).reduce((sum, statId) => sum + getEquipmentBonusForStat(statId), 0);
 }
 
+function getGearRarityClass(rarity) {
+  return `gear-rarity-${String(rarity || '').toLowerCase()}`;
+}
+
 function renderGear() {
   const powerEl = $('gearPowerValue');
   const descEl = $('gearPowerDesc');
+  const setListEl = $('gearSetList');
   const slotsEl = $('gearSlotsGrid');
   const inventoryEl = $('gearInventoryList');
-  if (!powerEl || !descEl || !slotsEl || !inventoryEl) return;
+  if (!powerEl || !descEl || !setListEl || !slotsEl || !inventoryEl) return;
 
   const totalPower = getTotalGearPower();
+  const equippedCount = Object.values(state.equippedGear || {}).filter(Boolean).length;
   powerEl.textContent = `+${totalPower}`;
   descEl.textContent = totalPower
-    ? 'I bonus gear sono gia applicati ai requisiti e ai livelli mostrati.'
-    : 'Completa le quest speciali per sbloccare equipaggiamento e potenziare il profilo.';
+    ? `${equippedCount}/${EQUIPMENT_SLOTS.length} slot attivi. Bonus item e set gia applicati ai requisiti e ai livelli mostrati.`
+    : 'Completa le quest speciali per riempire il loadout e sbloccare bonus progressivi di set.';
 
-  const slotOrder = ['WEAPON','HEAD','CHEST','ACCESSORY'];
-  slotsEl.innerHTML = slotOrder.map(slot => {
+  const setCounts = getEquippedSetCounts();
+  setListEl.innerHTML = Object.entries(EQUIPMENT_SET_BONUSES).map(([setId, setDef]) => {
+    const count = setCounts[setId] || 0;
+    const bonuses = Object.entries(setDef.thresholds).map(([threshold, stats]) => {
+      const active = count >= Number(threshold);
+      return `<div class="gear-set-threshold ${active ? 'active' : ''}">${active ? '✓' : '○'} ${threshold}p · ${Object.entries(stats).map(([stat, val]) => `+${val} ${stat}`).join(' · ')}</div>`;
+    }).join('');
+    return `
+      <div class="gear-set-card ${count ? 'active' : ''}">
+        <div class="gear-set-head">
+          <div class="gear-set-name">${setDef.icon} ${setDef.name}</div>
+          <div class="gear-set-count">${count} / 4</div>
+        </div>
+        <div class="gear-set-bonuses">${bonuses}</div>
+      </div>`;
+  }).join('');
+
+  slotsEl.innerHTML = EQUIPMENT_SLOTS.map(slot => {
     const item = getEquippedItem(slot);
     const bonuses = item
       ? Object.entries(item.bonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('')
       : '';
     return `
-      <div class="gear-slot-card ${item ? 'equipped' : 'empty'}">
-        <div class="small muted">${EQUIPMENT_SLOT_LABELS[slot]}</div>
+      <div class="gear-slot-card ${item ? 'equipped' : 'empty'}" data-slot="${slot}">
+        <div class="gear-slot-label">${EQUIPMENT_SLOT_LABELS[slot]}</div>
         ${item ? `
           <div class="gear-item-head">
             <div class="gear-item-icon">${item.icon}</div>
             <div>
               <div class="gear-item-name">${item.name}</div>
-              <div class="gear-item-rarity">${item.rarity}</div>
+              <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity}</div>
             </div>
           </div>
           <div class="gear-item-desc">${item.desc}</div>
           <div class="gear-item-bonuses">${bonuses}</div>
+          <div class="gear-slot-meta">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}</div>
           <button class="btn ghost" data-unequip-slot="${slot}">Rimuovi</button>` : `
-          <div class="gear-empty-state">Slot vuoto. Le missioni speciali lo riempiranno.</div>`}
+          <div class="gear-slot-empty">Slot vuoto. Completa la quest speciale collegata per attivarlo.</div>`}
       </div>`;
   }).join('');
 
@@ -2669,15 +2921,16 @@ function renderGear() {
             <div class="gear-item-icon">${item.icon}</div>
             <div>
               <div class="gear-item-name">${item.name}</div>
-              <div class="gear-item-rarity">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
+              <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
             </div>
           </div>
           <div class="gear-item-bonuses">${bonuses}</div>
         </div>
         <div class="gear-item-desc">${item.desc}</div>
+        <div class="gear-card-slot">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}</div>
         <button class="btn ${equipped ? 'ghost' : ''}" data-equip-item="${item.id}">${equipped ? 'Equipaggiato' : 'Equipaggia'}</button>
       </div>`;
-  }).join('') : '<div class="gear-empty-state">Nessun equip ottenuto. Raggiungi i requisiti delle missioni speciali per sbloccarlo.</div>';
+  }).join('') : '<div class="gear-empty-state">Nessun equip ottenuto. Le missioni speciali iniziano a comparire quando alzi le stat richieste.</div>';
 
   slotsEl.querySelectorAll('[data-unequip-slot]').forEach(btn => btn.addEventListener('click', () => unequipItem(btn.dataset.unequipSlot)));
   inventoryEl.querySelectorAll('[data-equip-item]').forEach(btn => btn.addEventListener('click', () => equipItem(btn.dataset.equipItem)));
@@ -3300,10 +3553,12 @@ function initAssessment() {
     showSystemPopup({
       tone: isForcedRest() ? 'warning' : 'info',
       badge: isForcedRest() ? 'WARNING' : 'GUIDE',
-      title: isForcedRest() ? 'FORCED REST DAY' : 'ANALISI COMPLETATA',
+      title: isForcedRest() ? 'FORCED REST DAY' : 'SCAN COMPLETATO',
       body: isForcedRest()
-        ? 'Il sistema consiglia recovery e protocolli di calma. Riduci le quest ad alto stress.'
-        : `Stato ${ansState}. Il board ha aggiornato priorita e missioni consigliate.`,
+        ? 'Biomarcatori in zona rossa. Il sistema impone recovery, downshift vagale e niente raid ad alto stress.'
+        : `Stato ${ansState}. Quest Board, advice engine e danger rating sono stati ricalibrati.`,
+      urgent: isForcedRest(),
+      sound: isForcedRest() ? 'urgent' : 'soft',
     });
   });
 
@@ -3378,7 +3633,18 @@ function init() {
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
   if (!state.customQuests)     state.customQuests = [];
   if (!state.ownedEquipment)   state.ownedEquipment = [];
-  if (!state.equippedGear)     state.equippedGear = { WEAPON:null, HEAD:null, CHEST:null, ACCESSORY:null };
+  if (!state.equippedGear)     state.equippedGear = createEmptyGearSlots();
+  state.ownedEquipment = [...new Set((state.ownedEquipment || []).map(itemId => LEGACY_EQUIPMENT_ID_MAP[itemId] || itemId))].filter(itemId => !!EQUIPMENT_CATALOG[itemId]);
+  state.specialQuestCompleted = [...new Set((state.specialQuestCompleted || []).map(questId => LEGACY_SPECIAL_QUEST_MAP[questId] || questId))];
+  state.equippedGear = Object.entries(state.equippedGear || {}).reduce((acc, [slot, itemId]) => {
+    const mappedSlot = LEGACY_SLOT_MAP[slot] || slot;
+    const mappedItem = LEGACY_EQUIPMENT_ID_MAP[itemId] || itemId;
+    if (createEmptyGearSlots()[mappedSlot] !== undefined && mappedItem && EQUIPMENT_CATALOG[mappedItem]) {
+      acc[mappedSlot] = mappedItem;
+    }
+    return acc;
+  }, createEmptyGearSlots());
+  state.equippedGear = { ...createEmptyGearSlots(), ...state.equippedGear };
   if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
 
   initStats();
