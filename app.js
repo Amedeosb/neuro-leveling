@@ -8,8 +8,49 @@
 
 let currentUser = null;
 let _saveTimeout = null;
+let _googleLoginPending = false;
+const STORAGE_KEY = 'neuro_leveling_v2';
+let currentScreen = 'status';
+let _systemPopupInterval = null;
+let _lastSystemPopupAt = 0;
+let _systemAudioContext = null;
+let _systemAudioUnlocked = false;
+let _gearCooldownInterval = null;
+const _domReadyPromise = document.readyState === 'loading'
+  ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+  : Promise.resolve();
 
 function $(id) { return document.getElementById(id); }
+
+function syncAppChromeMetrics() {
+  const root = document.documentElement;
+  const userBar = $('userBar');
+  const navBar = document.querySelector('.nav-bar');
+  root.style.setProperty('--chrome-top', `${userBar ? userBar.offsetHeight : 0}px`);
+  root.style.setProperty('--chrome-bottom', `${navBar ? navBar.offsetHeight : 64}px`);
+}
+
+function ensureAppVisibility() {
+  const login = $('loginScreen');
+  const onb = $('onboarding');
+  const main = $('mainApp');
+  if (!login || !onb || !main) return;
+
+  const allHidden = login.classList.contains('hidden') && onb.classList.contains('hidden') && main.classList.contains('hidden');
+  if (!allHidden) return;
+
+  if (currentUser) {
+    if (state.onboardingDone) {
+      onb.classList.add('hidden');
+      main.classList.remove('hidden');
+    } else {
+      onb.classList.remove('hidden');
+      main.classList.add('hidden');
+    }
+  } else {
+    login.classList.remove('hidden');
+  }
+}
 
 function showAuthError(msg) {
   const el = $('authError');
@@ -30,13 +71,138 @@ function getSupabaseErrorMessage(msg) {
   return msg;
 }
 
+function getOAuthRedirectUrl() {
+  const { protocol, origin, pathname } = window.location;
+  if (protocol !== 'http:' && protocol !== 'https:') return null;
+
+  const cleanPath = pathname.endsWith('/index.html')
+    ? pathname.slice(0, -'/index.html'.length) || '/'
+    : pathname;
+
+  return origin + cleanPath;
+}
+
+function clearOAuthUrlArtifacts() {
+  const cleanUrl = window.location.origin + window.location.pathname;
+  window.history.replaceState({}, document.title, cleanUrl);
+}
+
+function buildAvatarSvgDataUri(emoji, color) {
+  const fill = color || '#00D4FF';
+  const glyph = emoji || '🛡️';
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+      <defs>
+        <linearGradient id="avatarGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="${fill}" />
+          <stop offset="100%" stop-color="#0a1020" />
+        </linearGradient>
+      </defs>
+      <rect width="96" height="96" rx="24" fill="url(#avatarGlow)" />
+      <circle cx="48" cy="48" r="30" fill="rgba(255,255,255,0.14)" />
+      <text x="48" y="58" text-anchor="middle" font-size="34">${glyph}</text>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function getAvatarConfig() {
+  return {
+    emoji: state.avatarEmoji || AVATAR_EMOJI_OPTIONS[0],
+    color: state.avatarColor || AVATAR_COLOR_OPTIONS[0],
+  };
+}
+
+function renderUserAvatar(meta = {}) {
+  const avatarEl = $('userAvatar');
+  if (!avatarEl) return;
+  const avatar = getAvatarConfig();
+  avatarEl.src = buildAvatarSvgDataUri(avatar.emoji, avatar.color) || meta.avatar_url || meta.picture || '';
+  avatarEl.alt = `Avatar ${state.playerName || 'Hunter'}`;
+}
+
+function getOAuthUrlState() {
+  const query = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash);
+
+  return {
+    code: query.get('code'),
+    accessToken: hash.get('access_token'),
+    refreshToken: hash.get('refresh_token'),
+    errorDescription: query.get('error_description') || hash.get('error_description'),
+  };
+}
+
+async function consumeOAuthRedirect() {
+  const { code, accessToken, refreshToken, errorDescription } = getOAuthUrlState();
+
+  if (errorDescription) {
+    clearOAuthUrlArtifacts();
+    showAuthError(decodeURIComponent(errorDescription));
+    return null;
+  }
+
+  if (code) {
+    const { data, error } = await supabaseClient.auth.exchangeCodeForSession(window.location.href);
+    clearOAuthUrlArtifacts();
+    if (error) {
+      console.error('[AUTH] exchangeCodeForSession error:', error);
+      showAuthError(getSupabaseErrorMessage(error.message));
+      return null;
+    }
+    return data?.session?.user || null;
+  }
+
+  if (accessToken && refreshToken) {
+    const { data, error } = await supabaseClient.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    clearOAuthUrlArtifacts();
+    if (error) {
+      console.error('[AUTH] setSession error:', error);
+      showAuthError(getSupabaseErrorMessage(error.message));
+      return null;
+    }
+    return data?.session?.user || null;
+  }
+
+  return null;
+}
+
 // Login con Google
 async function googleLogin() {
-  const { error } = await supabaseClient.auth.signInWithOAuth({
+  if (_googleLoginPending) return;
+  _googleLoginPending = true;
+
+  const redirectTo = getOAuthRedirectUrl();
+  if (!redirectTo) {
+    _googleLoginPending = false;
+    showAuthError('Apri l\'app da server locale o da GitHub Pages. Usa http://localhost:4173 invece di aprire il file direttamente.');
+    return;
+  }
+
+  const { data, error } = await supabaseClient.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin + window.location.pathname }
+    options: {
+      redirectTo,
+      queryParams: {
+        prompt: 'select_account'
+      }
+    }
   });
-  if (error) showAuthError(getSupabaseErrorMessage(error.message));
+  if (error) {
+    _googleLoginPending = false;
+    showAuthError(getSupabaseErrorMessage(error.message));
+    return;
+  }
+
+  if (data?.url) {
+    window.location.assign(data.url);
+    return;
+  }
+
+  _googleLoginPending = false;
 }
 
 // Login con Email/Password
@@ -78,62 +244,174 @@ async function forgotPassword() {
 
 // Logout
 async function logout() {
+  await saveState({ immediate: true });
   await supabaseClient.auth.signOut();
 }
 
-// Carica stato da Supabase, con fallback su localStorage
-async function loadStateFromCloud(uid) {
-  // Prova dal cloud
+function getStorageKey(uid) {
+  return uid ? `${STORAGE_KEY}:${uid}` : STORAGE_KEY;
+}
+
+function readStoredState(uid) {
   try {
-    const { data, error } = await supabaseClient
+    const raw = localStorage.getItem(getStorageKey(uid));
+    if (!raw) return null;
+    return { ...DEFAULT_STATE, ...JSON.parse(raw) };
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeStoredState(snapshot, uid = currentUser?.id) {
+  const serialized = JSON.stringify(snapshot);
+  localStorage.setItem(getStorageKey(), serialized);
+  if (uid) localStorage.setItem(getStorageKey(uid), serialized);
+}
+
+function clearStoredState(uid = currentUser?.id) {
+  localStorage.removeItem(getStorageKey());
+  if (uid) localStorage.removeItem(getStorageKey(uid));
+}
+
+function normalizeState(snapshot) {
+  const base = createFreshState();
+  return {
+    ...base,
+    ...(snapshot || {}),
+    stats: { ...base.stats, ...(snapshot?.stats || {}) },
+    completedTodayIds: Array.isArray(snapshot?.completedTodayIds) ? snapshot.completedTodayIds : base.completedTodayIds,
+    assessmentHistory: Array.isArray(snapshot?.assessmentHistory) ? snapshot.assessmentHistory : base.assessmentHistory,
+    activeDebuffs: Array.isArray(snapshot?.activeDebuffs) ? snapshot.activeDebuffs : base.activeDebuffs,
+    achievements: Array.isArray(snapshot?.achievements) ? snapshot.achievements : base.achievements,
+    bossesDefeated: Array.isArray(snapshot?.bossesDefeated) ? snapshot.bossesDefeated : base.bossesDefeated,
+    completedQuestLog: Array.isArray(snapshot?.completedQuestLog) ? snapshot.completedQuestLog : base.completedQuestLog,
+    completedQuestDetails: Array.isArray(snapshot?.completedQuestDetails) ? snapshot.completedQuestDetails : base.completedQuestDetails,
+    customQuests: Array.isArray(snapshot?.customQuests) ? snapshot.customQuests : base.customQuests,
+    equipmentInventory: Array.isArray(snapshot?.equipmentInventory) ? snapshot.equipmentInventory : base.equipmentInventory,
+    bossTitles: Array.isArray(snapshot?.bossTitles) ? snapshot.bossTitles : base.bossTitles,
+    bucketListChecks: snapshot?.bucketListChecks && typeof snapshot.bucketListChecks === 'object' ? snapshot.bucketListChecks : base.bucketListChecks,
+    equippedGear: snapshot?.equippedGear && typeof snapshot.equippedGear === 'object' ? snapshot.equippedGear : base.equippedGear,
+    equipmentUpgrades: snapshot?.equipmentUpgrades && typeof snapshot.equipmentUpgrades === 'object' ? snapshot.equipmentUpgrades : base.equipmentUpgrades,
+    materials: snapshot?.materials && typeof snapshot.materials === 'object' ? snapshot.materials : base.materials,
+    flaskState: snapshot?.flaskState && typeof snapshot.flaskState === 'object' ? snapshot.flaskState : base.flaskState,
+  };
+}
+
+function getBestLocalState(uid) {
+  return normalizeState(readStoredState(uid) || readStoredState() || createFreshState());
+}
+
+function createFreshState() {
+  return JSON.parse(JSON.stringify(DEFAULT_STATE));
+}
+
+// Carica stato da Supabase (con timeout), con fallback su localStorage
+async function loadStateFromCloud(uid) {
+  // Prova dal cloud con timeout di 5 secondi
+  try {
+    const cloudPromise = supabaseClient
       .from('players')
       .select('state')
       .eq('id', uid)
-      .single();
+      .maybeSingle();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Cloud load timeout')), 5000)
+    );
+    const { data, error } = await Promise.race([cloudPromise, timeoutPromise]);
     if (!error && data && data.state) {
-      // Successo dal cloud, aggiorna anche localStorage
-      const merged = { ...DEFAULT_STATE, ...data.state };
-      localStorage.setItem('neuro_leveling_v2', JSON.stringify(merged));
-      return merged;
+      const merged = normalizeState(data.state);
+      writeStoredState(merged, uid);
+      return { state: merged, found: true };
     }
+    if (error) console.warn('Supabase load error:', error);
   } catch (e) {
     console.warn('Supabase load error:', e);
   }
-  // Fallback su localStorage
-  try {
-    const local = localStorage.getItem('neuro_leveling_v2');
-    if (local) return { ...DEFAULT_STATE, ...JSON.parse(local) };
-  } catch (e) {}
-  return { ...DEFAULT_STATE };
+  return { state: getBestLocalState(uid), found: false };
 }
 
 // Salva su Supabase + localStorage (debounced)
-function saveState() {
-  localStorage.setItem('neuro_leveling_v2', JSON.stringify(state));
-  if (!currentUser) return;
+async function saveStateNow() {
+  writeStoredState(state);
+  if (!currentUser) return { error: null };
+  const { error } = await supabaseClient
+    .from('players')
+    .upsert({ id: currentUser.id, state: state });
+  if (error) console.warn('Supabase save error:', error);
+  return { error };
+}
+
+function saveState(options = {}) {
+  const { immediate = false } = options;
+  writeStoredState(state);
+  if (!currentUser) return immediate ? Promise.resolve({ error: null }) : undefined;
+
   clearTimeout(_saveTimeout);
+
+  if (immediate) {
+    return saveStateNow();
+  }
+
   _saveTimeout = setTimeout(() => {
-    supabaseClient.from('players').upsert({ id: currentUser.id, state: state })
-      .then(({ error }) => { if (error) console.warn('Supabase save error:', error); });
+    saveStateNow();
   }, 1000);
 }
 
 // Funzione che gestisce l'ingresso nell'app dopo l'auth
 let _appEntered = false;
+let _initDone = false;
+
+function initOnce() {
+  if (_initDone) return;
+  _initDone = true;
+  init();
+}
+
 async function enterApp(user) {
   if (_appEntered) return;
   _appEntered = true;
   currentUser = user;
-  // Pulisci hash residuo da OAuth
-  if (window.location.hash) {
-    history.replaceState(null, '', window.location.pathname);
-  }
+  state = getBestLocalState(user.id);
   $('loginScreen').classList.add('hidden');
+
+  // Mostra subito la schermata corretta per evitare il flash nero
+  if (state.onboardingDone) {
+    $('onboarding').classList.add('hidden');
+    $('mainApp').classList.remove('hidden');
+  } else {
+    $('onboarding').classList.remove('hidden');
+    $('mainApp').classList.add('hidden');
+  }
+  setTimeout(syncAppChromeMetrics, 0);
+
   const meta = user.user_metadata || {};
-  $('userAvatar').src = meta.avatar_url || meta.picture || '';
+  renderUserAvatar(meta);
   $('userEmail').textContent = user.email || '';
-  state = await loadStateFromCloud(user.id);
+
+  // Inizializza subito la UI con lo stato locale/default.
+  _initDone = false;
   init();
+
+  // Carica dal cloud in background e aggiorna solo quando pronto.
+  try {
+    const { state: cloudState, found } = await loadStateFromCloud(user.id);
+    const currentStateJson = JSON.stringify(state);
+    const cloudStateJson = JSON.stringify(cloudState);
+    state = cloudState;
+    writeStoredState(state, user.id);
+    if (cloudStateJson !== currentStateJson) {
+      _initDone = false;
+      init();
+    }
+    if (!found && state.onboardingDone) {
+      await saveState({ immediate: true });
+    }
+  } catch (e) {
+    console.warn('Cloud load failed, using local state');
+  }
+
+  // Failsafe: evita schermata nera in caso di race condition tra callback auth/UI
+  setTimeout(ensureAppVisibility, 0);
 }
 
 function showLogin() {
@@ -146,72 +424,61 @@ function showLogin() {
   }
 }
 
-// ── GESTIONE MANUALE REDIRECT OAUTH ──
-// Dopo il redirect da Google, l'URL contiene i token nell'hash (#access_token=...)
-// Li prendiamo manualmente e chiamiamo setSession()
-async function handleOAuthTokensFromUrl() {
-  const hash = window.location.hash.substring(1); // rimuovi il #
-  if (!hash) return null;
-  const params = new URLSearchParams(hash);
-  const accessToken = params.get('access_token');
-  const refreshToken = params.get('refresh_token');
-  if (!accessToken || !refreshToken) return null;
-  
-  console.log('[AUTH] Token OAuth trovati nell\'URL, imposto sessione...');
-  // Pulisci l'URL subito
-  history.replaceState(null, '', window.location.pathname);
-  
-  const { data, error } = await supabaseClient.auth.setSession({
-    access_token: accessToken,
-    refresh_token: refreshToken
-  });
-  if (error) {
-    console.error('[AUTH] Errore setSession:', error);
-    return null;
-  }
-  return data?.session?.user || null;
-}
-
-// ── Auth: logica principale ──
-// onAuthStateChange gestisce eventi live (logout, token refresh dopo che l'app è entrata)
+// ── Auth: gestisce solo eventi LIVE (logout, login) ──
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
-  if (document.readyState === 'loading') {
-    await new Promise(r => document.addEventListener('DOMContentLoaded', r));
+  await _domReadyPromise;
+  console.log('[AUTH] event:', event);
+  if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+    _googleLoginPending = false;
   }
-  console.log('[AUTH] event:', event, 'user:', !!session?.user);
-
   if (event === 'SIGNED_OUT') {
     showLogin();
-  } else if (session?.user && !_appEntered) {
-    await enterApp(session.user);
+  } else if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session?.user && !_appEntered) {
+    enterApp(session.user);
   }
 });
 
-// ── Inizializzazione auth su DOMContentLoaded ──
-document.addEventListener('DOMContentLoaded', async () => {
+async function bootstrapAuth() {
   try {
-    // 1. Controlla se siamo tornati da un redirect OAuth con token nell'URL
-    const oauthUser = await handleOAuthTokensFromUrl();
+    const oauthUser = await consumeOAuthRedirect();
     if (oauthUser) {
-      await enterApp(oauthUser);
+      enterApp(oauthUser);
       return;
     }
 
-    // 2. Controlla se c'è già una sessione salvata (refresh della pagina)
-    const { data } = await supabaseClient.auth.getSession();
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+
     if (data?.session?.user) {
-      await enterApp(data.session.user);
-      return;
+      enterApp(data.session.user);
+    } else if (!state.onboardingDone) {
+      showLogin();
     }
-
-    // 3. Nessuna sessione → mostra login (con piccolo delay per onAuthStateChange)
-    setTimeout(() => {
-      if (!_appEntered) showLogin();
-    }, 1000);
   } catch (e) {
-    console.error('[AUTH] Init error:', e);
-    showLogin();
+    console.error('[AUTH] getSession error:', e);
+    if (!state.onboardingDone) showLogin();
+  } finally {
+    setTimeout(ensureAppVisibility, 0);
   }
+}
+
+// ── Inizializzazione su DOMContentLoaded ──
+document.addEventListener('DOMContentLoaded', () => {
+  syncAppChromeMetrics();
+  window.addEventListener('resize', syncAppChromeMetrics);
+  window.addEventListener('pointerdown', unlockSystemAudio, { once: true });
+  window.addEventListener('keydown', unlockSystemAudio, { once: true });
+
+  // 1. SEMPRE init() subito con i dati locali (state è già caricato da loadState())
+  if (state.onboardingDone) {
+    $('loginScreen').classList.add('hidden');
+    $('onboarding').classList.add('hidden');
+    $('mainApp').classList.remove('hidden');
+    initOnce();
+  }
+
+  // 2. Supabase auth check in background (non blocca la UI)
+  bootstrapAuth();
 });
 
 // Event listeners login/logout
@@ -267,6 +534,53 @@ const CLASS_DEFINITIONS = [
   { id:'LEADER',    name:'LEADER',         icon:'👑', primary:['CHA','LEA'], desc:'Nato per guidare. Il tuo carisma e visione ispirano chi ti circonda.' },
   { id:'ARTIST',    name:'CREATIVE MIND',  icon:'🎨', primary:['INT','CRE'], desc:'Pensiero divergente e intuizione. Vedi soluzioni dove altri vedono muri.' },
 ];
+
+const TRAIT_SIGNAL_MAP = {
+  disciplina: { stats:['DIS','WIL'], questIds:['deep_work','quiver_zero_protocol','meditation'], bossIds:['PROCRASTINATION_LEECH','PERFECTION_JUDGE'] },
+  procrastinazione: { stats:['DIS','FOC'], questIds:['deep_work','quiver_zero_protocol','strategic_reading'], bossIds:['PROCRASTINATION_LEECH','PERFECTION_JUDGE'] },
+  focus: { stats:['FOC','INT'], questIds:['deep_work','monarch_helm_scan','azure_flask_sync'], bossIds:['PROCRASTINATION_LEECH','PERFECTION_JUDGE'] },
+  ansia: { stats:['VAG','CO2'], questIds:['vagal_reset','box_breathing','vagal_amulet_recovery'], bossIds:['ANXIETY_WRAITH','PANIC_HYDRA'] },
+  panico: { stats:['VAG','CO2'], questIds:['box_breathing','vagal_reset','co2_loop_dive'], bossIds:['PANIC_HYDRA','ANXIETY_WRAITH'] },
+  rabbia: { stats:['VAG','EMP'], questIds:['meditation','vagal_reset','social_exposure'], bossIds:['ANGER_BERSERKER'] },
+  vergogna: { stats:['CHA','WIL','EMP'], questIds:['social_exposure','public_speaking','empathy_training'], bossIds:['SHAME_SIREN'] },
+  giudizio: { stats:['CHA','WIL'], questIds:['public_speaking','social_exposure'], bossIds:['SHAME_SIREN','PERFECTION_JUDGE'] },
+  paura: { stats:['WIL','VAG'], questIds:['meditation','box_breathing','social_exposure'], bossIds:['ANXIETY_WRAITH','PANIC_HYDRA','SHAME_SIREN'] },
+  fallire: { stats:['WIL','DIS'], questIds:['deep_work','meditation','strategic_reading'], bossIds:['PERFECTION_JUDGE','DESPAIR_PHANTOM'] },
+  espormi: { stats:['CHA','EMP'], questIds:['social_exposure','public_speaking','empathy_training'], bossIds:['SHAME_SIREN','ISOLATION_WEAVER'] },
+  controllo: { stats:['WIL','DIS'], questIds:['meditation','deep_work','creative_block'], bossIds:['PERFECTION_JUDGE','ANXIETY_WRAITH'] },
+  sociale: { stats:['CHA','EMP'], questIds:['social_exposure','empathy_training','public_speaking'], bossIds:['ISOLATION_WEAVER','SHAME_SIREN'] },
+  empatia: { stats:['EMP','CHA'], questIds:['empathy_training','social_exposure','vagal_amulet_recovery'], bossIds:['ISOLATION_WEAVER','ANGER_BERSERKER'] },
+  leadership: { stats:['LEA','CHA'], questIds:['public_speaking','social_exposure'], bossIds:['SHAME_SIREN','ENVY_CHIMERA'] },
+  forza: { stats:['STR','RES'], questIds:['strength','iron_heart_forge','calisthenics'], bossIds:['LETHARGY_GOLEM','ANGER_BERSERKER'] },
+  resistenza: { stats:['RES','VIT'], questIds:['endurance_run','cardio_hiit','iron_heart_forge'], bossIds:['LETHARGY_GOLEM','DESPAIR_PHANTOM'] },
+  creativita: { stats:['CRE','INT'], questIds:['creative_block','memory_palace'], bossIds:['ENVY_CHIMERA','PERFECTION_JUDGE'] },
+  perfezionismo: { stats:['DIS','FOC'], questIds:['creative_block','deep_work','strategic_reading'], bossIds:['PERFECTION_JUDGE'] },
+  isolamento: { stats:['EMP','CHA','VAG'], questIds:['social_exposure','empathy_training','vagal_reset'], bossIds:['ISOLATION_WEAVER'] },
+  invidia: { stats:['ADA','WIL'], questIds:['meditation','creative_block','strategic_reading'], bossIds:['ENVY_CHIMERA'] },
+  confronto: { stats:['ADA','WIL'], questIds:['meditation','creative_block','deep_work'], bossIds:['ENVY_CHIMERA'] },
+  letargia: { stats:['RES','VIT','FOC'], questIds:['cold_exposure','movement_prime','endurance_run'], bossIds:['LETHARGY_GOLEM','DESPAIR_PHANTOM'] },
+  stanchezza: { stats:['VIT','RES'], questIds:['cold_exposure','endurance_run','crimson_flask_brew'], bossIds:['LETHARGY_GOLEM'] },
+};
+
+const TRAIT_SOURCE_LABELS = {
+  strengths: 'Leva di build',
+  weaknesses: 'Frattura da correggere',
+  fears: 'Boss interiore',
+};
+
+function normalizePlainText(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function getTraitSignals(text) {
+  const normalized = normalizePlainText(text);
+  return Object.entries(TRAIT_SIGNAL_MAP)
+    .filter(([keyword]) => normalized.includes(keyword))
+    .map(([keyword, config]) => ({ keyword, ...config }));
+}
 
 // ========================
 // QUEST DEFINITIONS
@@ -449,6 +763,7 @@ const BOSS_DEFINITIONS = [
   {
     id:'ANXIETY_WRAITH', name:'Anxiety Wraith', title:"Lo Spettro dell'Ansia",
     desc:"Un'entità che si nutre dei segnali di errore del sistema predittivo del cervello.",
+    emotionLabel:'ALLERTA / PAURA ANTICIPATORIA', themeClass:'anxiety', quote:'Non ogni allarme merita obbedienza.', titleReward:'Wraithbreaker',
     maxHP:100, level:1, icon:'👻',
     req:[{stat:'VAG',minLv:5},{stat:'CO2',minLv:3}],
     protocol:[
@@ -463,6 +778,7 @@ const BOSS_DEFINITIONS = [
   {
     id:'LETHARGY_GOLEM', name:'Lethargy Golem', title:'Il Golem della Letargia',
     desc:'Massa inerte che drena motivazione. Rallenta il metabolismo e offusca la mente.',
+    emotionLabel:'STASI / BASSA ATTIVAZIONE', themeClass:'lethargy', quote:'Il corpo si sveglia quando l’inerzia viene insultata dal movimento.', titleReward:'Spark Carrier',
     maxHP:120, level:2, icon:'🗿',
     req:[{stat:'RES',minLv:4},{stat:'FOC',minLv:3}],
     protocol:[
@@ -476,6 +792,7 @@ const BOSS_DEFINITIONS = [
   {
     id:'PROCRASTINATION_LEECH', name:'Procrastination Leech', title:'La Sanguisuga della Procrastinazione',
     desc:"Parassita che offre gratificazione immediata svuotando quella a lungo termine.",
+    emotionLabel:'ATTRITO / EVITAMENTO', themeClass:'procrastination', quote:'Il primo minuto è il vero mostro. Dopo, resta solo lavoro.', titleReward:'Deadline Reaper',
     maxHP:130, level:2, icon:'🩸',
     req:[{stat:'FOC',minLv:4},{stat:'DIS',minLv:3}],
     protocol:[
@@ -489,6 +806,7 @@ const BOSS_DEFINITIONS = [
   {
     id:'ANGER_BERSERKER', name:'Anger Berserker', title:'Il Berserker della Rabbia',
     desc:'Forza bruta che consuma energia e distrugge relazioni.',
+    emotionLabel:'FUOCO / IMPULSO', themeClass:'anger', quote:'La rabbia disciplinata diventa lama; quella cieca diventa gabbia.', titleReward:'Ember Sovereign',
     maxHP:150, level:3, icon:'🔥',
     req:[{stat:'VAG',minLv:7},{stat:'EMP',minLv:5},{stat:'CO2',minLv:5}],
     protocol:[
@@ -502,6 +820,7 @@ const BOSS_DEFINITIONS = [
   {
     id:'DESPAIR_PHANTOM', name:'Despair Phantom', title:'Il Fantasma della Disperazione',
     desc:"Un'ombra che svuota di significato ogni azione. Paralisi motivazionale profonda.",
+    emotionLabel:'VUOTO / COLLASSO', themeClass:'despair', quote:'Anche un passo senza speranza resta un passo contro il nulla.', titleReward:'Void Survivor',
     maxHP:180, level:4, icon:'🌑',
     req:[{stat:'VAG',minLv:8},{stat:'FOC',minLv:6},{stat:'RES',minLv:5},{stat:'EMP',minLv:4}],
     protocol:[
@@ -511,6 +830,76 @@ const BOSS_DEFINITIONS = [
       {instr:'VALUE RECONNECTION: Scrivi in 60 secondi "Per cosa vale la pena lottare?".', dur:90},
     ],
     rewards:[{stat:'VAG',xp:150},{stat:'FOC',xp:100},{stat:'EMP',xp:90},{stat:'RES',xp:60}],
+  },
+  {
+    id:'SHAME_SIREN', name:'Shame Siren', title:'La Sirena della Vergogna',
+    desc:'Canta giudizi interiori finché smetti di esporti e torni invisibile.',
+    emotionLabel:'VERGOGNA / AUTO-SVALUTAZIONE', themeClass:'shame', quote:'Mostrarti imperfetto è già una forma di dominio.', titleReward:'Unmasked One',
+    maxHP:200, level:5, icon:'🎭',
+    req:[{stat:'CHA',minLv:6},{stat:'WIL',minLv:6},{stat:'EMP',minLv:5}],
+    protocol:[
+      {instr:'POSTURA DI PRESENZA: petto aperto, sguardo frontale, respirazione nasale per 90 secondi.', dur:90},
+      {instr:'VERITÀ BREVE: scrivi una frase reale che stai evitando di dire ad alta voce.', dur:60},
+      {instr:'SELF-COMPASSION RESET: formula 3 frasi come parleresti a un amico che stimi.', dur:120},
+      {instr:'MICRO-EXPOSURE: invia un messaggio o pubblica un contenuto che di solito nasconderesti.', dur:180},
+    ],
+    rewards:[{stat:'CHA',xp:130},{stat:'WIL',xp:100},{stat:'EMP',xp:80}],
+  },
+  {
+    id:'PANIC_HYDRA', name:'Panic Hydra', title:'L’Idra del Panico',
+    desc:'Ogni pensiero catastrofico tagliato ne genera due nuovi se il respiro cede.',
+    emotionLabel:'PANICO / CATASTROFE', themeClass:'panic', quote:'Il panico vuole velocità. Tu vinci con ritmo.', titleReward:'Pulse Master',
+    maxHP:220, level:6, icon:'🐍',
+    req:[{stat:'CO2',minLv:7},{stat:'VAG',minLv:7},{stat:'FOC',minLv:5}],
+    protocol:[
+      {instr:'EXHALE LADDER: espira per 6s, 7s, 8s, 9s, 10s. Un ciclo completo.', dur:150},
+      {instr:'COUNT & TOUCH: conta 30 tocchi alternati sulle dita senza accelerare.', dur:90},
+      {instr:'VISUAL LOCK: fissa un punto e descrivilo in 5 dettagli precisi.', dur:60},
+      {instr:'WALK THE SURGE: cammina lentamente per 3 minuti tenendo le spalle basse.', dur:180},
+    ],
+    rewards:[{stat:'CO2',xp:140},{stat:'VAG',xp:110},{stat:'FOC',xp:90}],
+  },
+  {
+    id:'ISOLATION_WEAVER', name:'Isolation Weaver', title:'Il Tessitore dell’Isolamento',
+    desc:'Intreccia distanze emotive finché ogni aiuto sembra un rischio.',
+    emotionLabel:'ISOLAMENTO / DISTACCO', themeClass:'isolation', quote:'Chiedere connessione non è debolezza. È strategia di sopravvivenza.', titleReward:'Signal Caller',
+    maxHP:235, level:7, icon:'🕸️',
+    req:[{stat:'EMP',minLv:7},{stat:'CHA',minLv:6},{stat:'VAG',minLv:6}],
+    protocol:[
+      {instr:'SCAN RELAZIONALE: nomina 3 persone sicure con cui puoi riallacciare il contatto.', dur:90},
+      {instr:'OUTBOUND ACTION: invia un messaggio autentico, non logistico, a una di loro.', dur:120},
+      {instr:'VOICE CONTACT: registra o fai una nota vocale di 60 secondi invece di nasconderti nel testo.', dur:90},
+      {instr:'PRESENZA SOCIALE: resta 5 minuti pienamente presente in una conversazione senza multitasking.', dur:300},
+    ],
+    rewards:[{stat:'EMP',xp:145},{stat:'CHA',xp:105},{stat:'VAG',xp:80}],
+  },
+  {
+    id:'PERFECTION_JUDGE', name:'Perfection Judge', title:'Il Giudice della Perfezione',
+    desc:'Condanna ogni bozza incompleta e trasforma il potenziale in stallo eterno.',
+    emotionLabel:'CONTROLLO / PERFEZIONISMO', themeClass:'perfectionism', quote:'Fatto batte perfetto. Sempre.', titleReward:'First Draft King',
+    maxHP:250, level:8, icon:'⚖️',
+    req:[{stat:'DIS',minLv:7},{stat:'INT',minLv:7},{stat:'FOC',minLv:7}],
+    protocol:[
+      {instr:'UGLY VERSION: produci una bozza deliberatamente imperfetta in 5 minuti.', dur:300},
+      {instr:'LIMITAZIONE VOLONTARIA: imponi una sola revisione massima.', dur:60},
+      {instr:'SHIP MODE: pubblica, invia o salva come completata la versione disponibile.', dur:120},
+      {instr:'POST-MORTEM BREVE: annota una cosa migliorabile senza riaprire il task.', dur:60},
+    ],
+    rewards:[{stat:'DIS',xp:150},{stat:'INT',xp:110},{stat:'FOC',xp:100}],
+  },
+  {
+    id:'ENVY_CHIMERA', name:'Envy Chimera', title:'La Chimera dell’Invidia',
+    desc:'Ti costringe a confrontarti con build altrui finché dimentichi la tua.',
+    emotionLabel:'CONFRONTO / IDENTITÀ', themeClass:'envy', quote:'Il confronto serve solo se ti riporta al tuo asse.', titleReward:'Pathkeeper',
+    maxHP:270, level:9, icon:'🦚',
+    req:[{stat:'ADA',minLv:7},{stat:'WIL',minLv:7},{stat:'INT',minLv:6}],
+    protocol:[
+      {instr:'SOCIAL FAST: chiudi feed, ranking e notifiche per 10 minuti reali.', dur:600},
+      {instr:'SELF-ANCHOR: scrivi 3 metriche con cui vuoi misurare solo te stesso.', dur:120},
+      {instr:'ENVY TRANSMUTE: trasforma un confronto in un’azione concreta da eseguire oggi.', dur:120},
+      {instr:'RETURN TO BUILD: completa un micro-step sul tuo progetto o corpo entro 3 minuti.', dur:180},
+    ],
+    rewards:[{stat:'ADA',xp:155},{stat:'WIL',xp:110},{stat:'INT',xp:90}],
   },
 ];
 
@@ -653,9 +1042,9 @@ const ACHIEVEMENT_DEFINITIONS = [
   { id:'combo_first',  name:'COMBO STARTER',    icon:'🔗', desc:'Attiva la prima combo.',       check:s=>(s.totalCombos||0)>=1 },
   { id:'combo_king',   name:'COMBO KING',       icon:'👑', desc:'Attiva 25 combo.',             check:s=>(s.totalCombos||0)>=25 },
   { id:'chain_first',  name:'CHAIN MASTER',     icon:'⛓️', desc:'Completa una catena.',          check:s=>Object.values(s.chainProgress||{}).some(c=>c.completed) },
-  { id:'class_10',     name:'CLASS ASCENSION',  icon:'🌟', desc:'Livello classe 10.',           check:s=>getClassLevel()>=10 },
-  { id:'lv_30',        name:'SHADOW ADEPT',     icon:'🌑', desc:'Livello totale 30+.',          check:s=>getTotalLevel()>=30 },
-  { id:'lv_60',        name:'MONARCH',          icon:'👁', desc:'Livello totale 60+.',          check:s=>getTotalLevel()>=60 },
+  { id:'class_10',     name:'CLASS ASCENSION',  icon:'🌟', desc:'Class Sync 10.',               check:s=>getClassLevel()>=10 },
+  { id:'lv_30',        name:'SHADOW ADEPT',     icon:'🌑', desc:'Hunter Rank 30+.',             check:s=>getTotalLevel()>=30 },
+  { id:'lv_60',        name:'MONARCH',          icon:'👁', desc:'Hunter Rank 60+.',             check:s=>getTotalLevel()>=60 },
   { id:'crit_10',      name:'LUCKY STRIKER',    icon:'⚡', desc:'10 colpi critici.',            check:s=>(s.criticalHits||0)>=10 },
   { id:'xp_10k',       name:'XP HARVESTER',     icon:'💰', desc:'Accumula 10.000 XP.',          check:s=>s.totalXP>=10000 },
   { id:'xp_100k',      name:'XP OVERLORD',      icon:'💎', desc:'Accumula 100.000 XP.',         check:s=>s.totalXP>=100000 },
@@ -675,6 +1064,374 @@ const BUFF_CATALOG = {
   IRON_BODY:     { name:'Corpo d\'Acciaio',icon:'🛡️', desc:'+50 XP STR/RES 24h', durType:'time', dur:86400000, effect:'bonusMulti', stats:['STR','RES'], value:50 },
   SHADOW_CLOAK:  { name:'Manto d\'Ombra', icon:'🌑', desc:'+50 XP WIL/CHA 24h', durType:'time', dur:86400000, effect:'bonusMulti', stats:['WIL','CHA'], value:50 },
   STAT_CRYSTAL:  { name:'Cristallo Stat',  icon:'✨', desc:'+15 XP stat random',  durType:'instant', effect:'instantXP', value:15 },
+};
+
+const EQUIPMENT_SLOTS = [
+  'WEAPON_MAIN',
+  'HELMET',
+  'WEAPON_OFF',
+  'AMULET',
+  'RING_LEFT',
+  'BODY',
+  'RING_RIGHT',
+  'GLOVES',
+  'BELT',
+  'BOOTS',
+  'FLASK_ONE',
+  'FLASK_TWO',
+];
+
+const EQUIPMENT_SLOT_LABELS = {
+  WEAPON_MAIN: 'WEAPON I',
+  HELMET: 'HELMET',
+  WEAPON_OFF: 'WEAPON II',
+  AMULET: 'AMULET',
+  RING_LEFT: 'RING I',
+  BODY: 'BODY ARMOUR',
+  RING_RIGHT: 'RING II',
+  GLOVES: 'GLOVES',
+  BELT: 'BELT',
+  BOOTS: 'BOOTS',
+  FLASK_ONE: 'FLASK I',
+  FLASK_TWO: 'FLASK II',
+};
+
+const EQUIPMENT_SET_BONUSES = {
+  SHADOWFORGED: {
+    name: 'Shadowforged Hunt',
+    icon: '🌑',
+    thresholds: {
+      2: { AGI: 1, FOC: 1 },
+      4: { WIL: 1 },
+    },
+  },
+  MONARCH_SYNTH: {
+    name: 'Monarch Synthesis',
+    icon: '👁',
+    thresholds: {
+      2: { INT: 1, CHA: 1 },
+      4: { FOC: 1, EMP: 1 },
+    },
+  },
+  IRON_HEART: {
+    name: 'Iron Heart Frame',
+    icon: '🛡️',
+    thresholds: {
+      2: { RES: 1, VIT: 1 },
+      4: { STR: 1, VAG: 1 },
+    },
+  },
+};
+
+function createEmptyGearSlots() {
+  return Object.fromEntries(EQUIPMENT_SLOTS.map(slot => [slot, null]));
+}
+
+const EQUIPMENT_CATALOG = {
+  SHADOW_RECURVE: {
+    id: 'SHADOW_RECURVE', slot: 'WEAPON_MAIN', set: 'SHADOWFORGED', name: 'Shadow Recurve', icon: '🏹', rarity: 'EPIC',
+    desc: 'Arco da caccia neurale. Trasforma attenzione e timing in esecuzione pulita.', bonuses: { AGI: 2, WIL: 1 },
+  },
+  QUIVER_ZERO: {
+    id: 'QUIVER_ZERO', slot: 'WEAPON_OFF', set: 'SHADOWFORGED', name: 'Quiver Zero', icon: '🪶', rarity: 'RARE',
+    desc: 'Faretra tattica con assetto minimal. Riduce attrito cognitivo e migliora precisione.', bonuses: { FOC: 1, AGI: 1, DIS: 1 },
+  },
+  MONARCH_HELM: {
+    id: 'MONARCH_HELM', slot: 'HELMET', set: 'MONARCH_SYNTH', name: 'Monarch Helm', icon: '👑', rarity: 'LEGENDARY',
+    desc: 'Interfaccia da comando che amplifica lettura di pattern e decisione fredda.', bonuses: { INT: 2, FOC: 1 },
+  },
+  VAGAL_AMULET: {
+    id: 'VAGAL_AMULET', slot: 'AMULET', set: 'MONARCH_SYNTH', name: 'Vagal Amulet', icon: '📿', rarity: 'EPIC',
+    desc: 'Amuleto di recovery che stabilizza il sistema prima di un fight mentale.', bonuses: { VAG: 2, EMP: 1 },
+  },
+  LUCID_RING_ALPHA: {
+    id: 'LUCID_RING_ALPHA', slot: 'RING_LEFT', set: 'MONARCH_SYNTH', name: 'Lucid Ring Alpha', icon: '💍', rarity: 'RARE',
+    desc: 'Anello per compressione del rumore mentale. Utile nei dungeon cognitivi.', bonuses: { INT: 1, CHA: 1 },
+  },
+  CO2_LOOP: {
+    id: 'CO2_LOOP', slot: 'RING_RIGHT', set: 'MONARCH_SYNTH', name: 'CO2 Loop', icon: '🫧', rarity: 'RARE',
+    desc: 'Circuito per addestrare la calma sotto pressione respiratoria.', bonuses: { CO2: 2, VAG: 1 },
+  },
+  IRON_HEART_CUIRASS: {
+    id: 'IRON_HEART_CUIRASS', slot: 'BODY', set: 'IRON_HEART', name: 'Iron Heart Cuirass', icon: '🦺', rarity: 'EPIC',
+    desc: 'Corazza per tenuta strutturale, postura e resilienza sotto carico.', bonuses: { RES: 2, STR: 2 },
+  },
+  GRIP_PROTOCOL: {
+    id: 'GRIP_PROTOCOL', slot: 'GLOVES', set: 'SHADOWFORGED', name: 'Grip Protocol Gloves', icon: '🧤', rarity: 'RARE',
+    desc: 'Guanti da esecuzione fine: mani calme, output veloce, minore dispersione.', bonuses: { FOC: 1, AGI: 1, STR: 1 },
+  },
+  CORE_BIND: {
+    id: 'CORE_BIND', slot: 'BELT', set: 'IRON_HEART', name: 'Core Bind Belt', icon: '🪢', rarity: 'EPIC',
+    desc: 'Cintura di compressione centrale. Migliora brace, volonta e stabilita.', bonuses: { WIL: 1, RES: 1, VIT: 1 },
+  },
+  STALKER_BOOTS: {
+    id: 'STALKER_BOOTS', slot: 'BOOTS', set: 'SHADOWFORGED', name: 'Stalker Boots', icon: '🥾', rarity: 'EPIC',
+    desc: 'Stivali per spostamenti puliti e rapidi. Il pavimento diventa un radar.', bonuses: { AGI: 2, ADA: 1 },
+  },
+  CRIMSON_FLASK: {
+    id: 'CRIMSON_FLASK', slot: 'FLASK_ONE', set: 'IRON_HEART', name: 'Crimson Flask', icon: '🧪', rarity: 'RARE',
+    desc: 'Flask da recovery rosso. Innalza vitalita operativa e capacity di recupero.', bonuses: { VIT: 2, RES: 1 },
+  },
+  AZURE_FLASK: {
+    id: 'AZURE_FLASK', slot: 'FLASK_TWO', set: 'IRON_HEART', name: 'Azure Flask', icon: '🧴', rarity: 'RARE',
+    desc: 'Flask blu da focus e regolazione. Ideale prima dei raid cognitivi.', bonuses: { FOC: 1, VAG: 1, DIS: 1 },
+  },
+};
+
+const SPECIAL_QUESTS = [
+  {
+    id:'shadow_recurve_trial', name:'Shadow Recurve Trial', desc:'Raid atletico per sbloccare l\'arco principale della build.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:8, dur:35, req:[{ stat:'AGI', minLv:4 },{ stat:'WIL', minLv:4 }], timed:true,
+    rewards:[{ stat:'AGI', xp:70 },{ stat:'WIL', xp:45 }],
+    protocol:['5 min warm-up rapido','20 min sprint tecnici o footwork','3 set di precision drill','Log finale: 3 errori, 3 fix'],
+    science:'Timing motorio e pressione moderata rinforzano accuratezza e controllo esecutivo.', icon:'🏹', equipmentId:'SHADOW_RECURVE'
+  },
+  {
+    id:'quiver_zero_protocol', name:'Quiver Zero Protocol', desc:'Protocollo di ordine e precisione per la seconda arma tattica.',
+    type:'SPECIAL', cat:'COGNITIVE', diff:6, dur:28, req:[{ stat:'FOC', minLv:3 },{ stat:'DIS', minLv:3 }], timed:false,
+    rewards:[{ stat:'FOC', xp:55 },{ stat:'DIS', xp:45 }],
+    protocol:['Reset del workspace','25 min task singolo senza alt-tab','2 min review sulle distrazioni','Chiudi con checklist minima'],
+    science:'Ridurre switching cost abbassa rumore cognitivo e migliora performance sostenuta.', icon:'🪶', equipmentId:'QUIVER_ZERO'
+  },
+  {
+    id:'monarch_helm_scan', name:'Monarch Helm Scan', desc:'Dungeon di deep work per sbloccare il casco da comando.',
+    type:'SPECIAL', cat:'COGNITIVE', diff:9, dur:45, req:[{ stat:'INT', minLv:5 },{ stat:'FOC', minLv:4 }], timed:true,
+    rewards:[{ stat:'INT', xp:80 },{ stat:'FOC', xp:50 }],
+    protocol:['45 min deep work blindato','1 problema difficile risolto','5 pattern estratti','3 decisioni tattiche nette'],
+    science:'Il focus prolungato potenzia controllo top-down e pattern recognition.', icon:'👑', equipmentId:'MONARCH_HELM'
+  },
+  {
+    id:'vagal_amulet_recovery', name:'Vagal Amulet Recovery', desc:'Recovery run per ottenere l\'amuleto di regolazione.',
+    type:'SPECIAL', cat:'SOCIAL', diff:7, dur:24, req:[{ stat:'VAG', minLv:4 },{ stat:'EMP', minLv:3 }], timed:false,
+    rewards:[{ stat:'VAG', xp:65 },{ stat:'EMP', xp:45 }],
+    protocol:['6 min box breathing','2 min splash freddo viso','1 contatto umano regolato','2 min journaling sul tono'],
+    science:'Respirazione, cold face exposure e co-regolazione migliorano flessibilita autonomica.', icon:'📿', equipmentId:'VAGAL_AMULET'
+  },
+  {
+    id:'lucid_ring_alpha', name:'Lucid Ring Alpha', desc:'Micro-raid sociale per guadagnare un anello di chiarezza.',
+    type:'SPECIAL', cat:'SOCIAL', diff:6, dur:20, req:[{ stat:'CHA', minLv:3 },{ stat:'INT', minLv:3 }], timed:false,
+    rewards:[{ stat:'CHA', xp:50 },{ stat:'INT', xp:40 }],
+    protocol:['Invia un messaggio ad alta chiarezza','Fai una domanda diretta','Evita filler per 10 min','Annota outcome e risposta'],
+    science:'La chiarezza espressiva riduce carico sociale e aumenta agency comunicativa.', icon:'💍', equipmentId:'LUCID_RING_ALPHA'
+  },
+  {
+    id:'co2_loop_dive', name:'CO2 Loop Dive', desc:'Sfida respiratoria controllata per il secondo anello.',
+    type:'SPECIAL', cat:'NEURAL', diff:7, dur:22, req:[{ stat:'CO2', minLv:4 },{ stat:'VAG', minLv:3 }], timed:false,
+    rewards:[{ stat:'CO2', xp:60 },{ stat:'VAG', xp:40 }],
+    protocol:['5 round di espirazioni lunghe','2 hold in sicurezza','Camminata nasale 8 min','Annota calma percepita'],
+    science:'Allenare la tolleranza alla CO2 migliora controllo autonomico e stabilita soggettiva.', icon:'🫧', equipmentId:'CO2_LOOP'
+  },
+  {
+    id:'iron_heart_forge', name:'Forge of Iron Heart', desc:'Quest pesante per forgiare il body armour principale.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:9, dur:50, req:[{ stat:'STR', minLv:5 },{ stat:'RES', minLv:5 }], timed:true,
+    rewards:[{ stat:'STR', xp:85 },{ stat:'RES', xp:55 }],
+    protocol:['Circuito forza-resistenza 30 min','Carry o plank finali','5 min nasal cooldown','Log del carico percepito'],
+    science:'Le prove miste forza-resistenza aumentano robustezza periferica e tolleranza al carico.', icon:'🦺', equipmentId:'IRON_HEART_CUIRASS'
+  },
+  {
+    id:'grip_protocol_gloves', name:'Grip Protocol Gloves', desc:'Missione fine-motoria per sbloccare i guanti da esecuzione.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:7, dur:26, req:[{ stat:'AGI', minLv:4 },{ stat:'FOC', minLv:3 }], timed:true,
+    rewards:[{ stat:'AGI', xp:60 },{ stat:'FOC', xp:45 }],
+    protocol:['10 min coordination drill','3 set hand-grip o hang leggero','5 min task di precisione','Review del tremore/controllo'],
+    science:'La precisione manuale sotto lieve fatica migliora controllo neuromotorio.', icon:'🧤', equipmentId:'GRIP_PROTOCOL'
+  },
+  {
+    id:'core_bind_belt', name:'Core Bind Belt', desc:'Raid posturale per cintura e stabilita centrale.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:8, dur:30, req:[{ stat:'RES', minLv:4 },{ stat:'VIT', minLv:3 }], timed:false,
+    rewards:[{ stat:'RES', xp:60 },{ stat:'VIT', xp:45 }],
+    protocol:['10 min core control','3 set carry o hollow hold','2 min posture reset','Nota su energia post-task'],
+    science:'La stabilita del tronco riduce costo energetico e migliora resilienza meccanica.', icon:'🪢', equipmentId:'CORE_BIND'
+  },
+  {
+    id:'stalker_boots_run', name:'Stalker Boots Run', desc:'Sprint stealth per ottenere gli stivali da mobilita.',
+    type:'SPECIAL', cat:'PHYSIQUE', diff:8, dur:32, req:[{ stat:'AGI', minLv:5 },{ stat:'ADA', minLv:3 }], timed:true,
+    rewards:[{ stat:'AGI', xp:70 },{ stat:'ADA', xp:40 }],
+    protocol:['Interval run 20 min','3 cambi ritmo controllati','2 min cooldown nasale','Debrief sulla fluidita'],
+    science:'Cambio di ritmo e adattamento rapido migliorano efficienza locomotoria.', icon:'🥾', equipmentId:'STALKER_BOOTS'
+  },
+  {
+    id:'crimson_flask_brew', name:'Crimson Flask Brew', desc:'Protocollo recovery per il primo flask.',
+    type:'SPECIAL', cat:'NEURAL', diff:6, dur:18, req:[{ stat:'VIT', minLv:3 },{ stat:'RES', minLv:3 }], timed:false,
+    rewards:[{ stat:'VIT', xp:50 },{ stat:'RES', xp:35 }],
+    protocol:['Hydration check','5 min camminata lenta','3 min breathing downshift','Nota sulla percezione di recupero'],
+    science:'Recovery attivo e idratazione migliorano disponibilita energetica e recupero.', icon:'🧪', equipmentId:'CRIMSON_FLASK'
+  },
+  {
+    id:'azure_flask_sync', name:'Azure Flask Sync', desc:'Setup mentale rapido per il flask blu da focus.',
+    type:'SPECIAL', cat:'COGNITIVE', diff:6, dur:18, req:[{ stat:'FOC', minLv:3 },{ stat:'VAG', minLv:3 }], timed:false,
+    rewards:[{ stat:'FOC', xp:50 },{ stat:'VAG', xp:35 }],
+    protocol:['2 min respiro 4-6','12 min task single-target','1 min reset schermo spento','Chiudi con obiettivo unico'],
+    science:'La modulazione respiratoria prima del focus riduce rumore e aumenta stabilita attentiva.', icon:'🧴', equipmentId:'AZURE_FLASK'
+  },
+];
+
+const LEGACY_EQUIPMENT_ID_MAP = {
+  SHADOW_DAGGER: 'SHADOW_RECURVE',
+  MONARCH_VISOR: 'MONARCH_HELM',
+  IRON_HEART_ARMOR: 'IRON_HEART_CUIRASS',
+  VAGAL_SIGIL: 'VAGAL_AMULET',
+};
+
+const LEGACY_SPECIAL_QUEST_MAP = {
+  shadow_trial: 'shadow_recurve_trial',
+  visor_protocol: 'monarch_helm_scan',
+  vagal_relic: 'vagal_amulet_recovery',
+};
+
+const LEGACY_SLOT_MAP = {
+  WEAPON: 'WEAPON_MAIN',
+  HEAD: 'HELMET',
+  CHEST: 'BODY',
+  ACCESSORY: 'AMULET',
+};
+
+Object.assign(EQUIPMENT_CATALOG, {
+  HUNTER_LONGBOW: {
+    id: 'HUNTER_LONGBOW', slot: 'WEAPON_MAIN', set: 'SHADOWFORGED', name: 'Hunter Longbow', icon: '🏹', rarity: 'RARE',
+    desc: 'Versione agile e pulita per run rapidi e precisione costante.', bonuses: { AGI: 1, FOC: 1 },
+  },
+  OBLIVION_CROWN: {
+    id: 'OBLIVION_CROWN', slot: 'HELMET', set: 'MONARCH_SYNTH', name: 'Oblivion Crown', icon: '🪖', rarity: 'EPIC',
+    desc: 'Corona tattica per raid cognitivi lunghi e pensiero freddo.', bonuses: { INT: 1, DIS: 1, FOC: 1 },
+  },
+  ECHO_AMULET: {
+    id: 'ECHO_AMULET', slot: 'AMULET', set: 'MONARCH_SYNTH', name: 'Echo Amulet', icon: '🜂', rarity: 'RARE',
+    desc: 'Amplifica presenza, tono e regolazione interpersonale.', bonuses: { EMP: 1, CHA: 1, VAG: 1 },
+  },
+  IRON_LOOP: {
+    id: 'IRON_LOOP', slot: 'RING_LEFT', set: 'IRON_HEART', name: 'Iron Loop', icon: '🪙', rarity: 'EPIC',
+    desc: 'Anello da carico e tenuta. Ideale nei giorni di volume alto.', bonuses: { STR: 1, RES: 1, VIT: 1 },
+  },
+  GHOST_RING: {
+    id: 'GHOST_RING', slot: 'RING_RIGHT', set: 'SHADOWFORGED', name: 'Ghost Ring', icon: '💠', rarity: 'EPIC',
+    desc: 'Riduce attrito mentale e rende i movimenti più invisibili.', bonuses: { AGI: 1, ADA: 1, FOC: 1 },
+  },
+  TITAN_PLATE: {
+    id: 'TITAN_PLATE', slot: 'BODY', set: 'IRON_HEART', name: 'Titan Plate', icon: '🛡️', rarity: 'LEGENDARY',
+    desc: 'Armatura boss-tier per build ad alta tenuta e sforzo prolungato.', bonuses: { STR: 2, RES: 2, VIT: 1 },
+  },
+  SURGE_GAUNTLETS: {
+    id: 'SURGE_GAUNTLETS', slot: 'GLOVES', set: 'SHADOWFORGED', name: 'Surge Gauntlets', icon: '🥊', rarity: 'EPIC',
+    desc: 'Guanti per output esplosivo e precisione sotto pressione.', bonuses: { STR: 1, AGI: 1, DIS: 1 },
+  },
+  REINFORCED_SASH: {
+    id: 'REINFORCED_SASH', slot: 'BELT', set: 'IRON_HEART', name: 'Reinforced Sash', icon: '🎗️', rarity: 'RARE',
+    desc: 'Sash per stabilità centrale e controllo respiratorio.', bonuses: { RES: 1, CO2: 1, VAG: 1 },
+  },
+  PHANTOM_BOOTS: {
+    id: 'PHANTOM_BOOTS', slot: 'BOOTS', set: 'SHADOWFORGED', name: 'Phantom Boots', icon: '👢', rarity: 'LEGENDARY',
+    desc: 'Stivali boss-tier per tracking, rapidità e adattamento.', bonuses: { AGI: 2, ADA: 2 },
+  },
+  GOLDEN_FLASK: {
+    id: 'GOLDEN_FLASK', slot: 'FLASK_ONE', set: 'MONARCH_SYNTH', name: 'Golden Flask', icon: '🍯', rarity: 'EPIC',
+    desc: 'Flask raro per boss push e spike di volontà.', bonuses: { WIL: 1, FOC: 1, VIT: 1 },
+  },
+  VOID_FLASK: {
+    id: 'VOID_FLASK', slot: 'FLASK_TWO', set: 'MONARCH_SYNTH', name: 'Void Flask', icon: '🧿', rarity: 'LEGENDARY',
+    desc: 'Flask d’élite per scan profondi e focus da raid finale.', bonuses: { INT: 1, FOC: 2 },
+  },
+  ANXIETY_WARD: {
+    id: 'ANXIETY_WARD', slot: 'AMULET', set: 'MONARCH_SYNTH', name: 'Anxiety Ward', icon: '🜁', rarity: 'LEGENDARY',
+    desc: 'Drop unico del Wraith: calma chirurgica sotto allerta.', bonuses: { VAG: 2, CO2: 1, WIL: 1 },
+  },
+  GOLEM_CORE: {
+    id: 'GOLEM_CORE', slot: 'BELT', set: 'IRON_HEART', name: 'Golem Core', icon: '🧱', rarity: 'LEGENDARY',
+    desc: 'Nucleo del Golem: densità, tenuta, resistenza alla letargia.', bonuses: { RES: 2, VIT: 2 },
+  },
+  LEECH_SPIKE: {
+    id: 'LEECH_SPIKE', slot: 'WEAPON_OFF', set: 'SHADOWFORGED', name: 'Leech Spike', icon: '🗡', rarity: 'EPIC',
+    desc: 'Drop unico anti-procrastinazione. Aggredisce attrito e inerzia.', bonuses: { DIS: 2, FOC: 1 },
+  },
+  BERSERKER_EMBLEM: {
+    id: 'BERSERKER_EMBLEM', slot: 'RING_RIGHT', set: 'IRON_HEART', name: 'Berserker Emblem', icon: '🔥', rarity: 'LEGENDARY',
+    desc: 'Trasforma rabbia grezza in output disciplinato.', bonuses: { STR: 2, WIL: 1, RES: 1 },
+  },
+  SHAME_MASK: {
+    id: 'SHAME_MASK', slot: 'HELMET', set: 'MONARCH_SYNTH', name: 'Shame Mask', icon: '🎭', rarity: 'LEGENDARY',
+    desc: 'Neutralizza l’auto-giudizio e stabilizza l’esposizione sociale.', bonuses: { CHA: 2, WIL: 1, EMP: 1 },
+  },
+  PANIC_CHAIN: {
+    id: 'PANIC_CHAIN', slot: 'AMULET', set: 'MONARCH_SYNTH', name: 'Panic Chain', icon: '📿', rarity: 'LEGENDARY',
+    desc: 'Ricorda al sistema che il ritmo viene prima della reazione.', bonuses: { CO2: 2, VAG: 1, FOC: 1 },
+  },
+  WEAVER_CLOAK: {
+    id: 'WEAVER_CLOAK', slot: 'BODY', set: 'SHADOWFORGED', name: 'Weaver Cloak', icon: '🕸️', rarity: 'LEGENDARY',
+    desc: 'Mantello da rete sociale: ti riporta verso connessioni ad alta qualità.', bonuses: { EMP: 2, CHA: 1, ADA: 1 },
+  },
+  JUDGE_SEAL: {
+    id: 'JUDGE_SEAL', slot: 'RING_LEFT', set: 'IRON_HEART', name: 'Judge Seal', icon: '⚖️', rarity: 'LEGENDARY',
+    desc: 'Sigillo anti-perfezionismo, fatto per eseguire e chiudere.', bonuses: { DIS: 2, FOC: 1, INT: 1 },
+  },
+  CHIMERA_EYE: {
+    id: 'CHIMERA_EYE', slot: 'WEAPON_OFF', set: 'SHADOWFORGED', name: 'Chimera Eye', icon: '🦚', rarity: 'LEGENDARY',
+    desc: 'Ricalibra il focus sulla tua build, non su quella degli altri.', bonuses: { ADA: 2, WIL: 1, INT: 1 },
+  },
+});
+
+const SPECIAL_QUEST_LOOT_TABLES = {
+  shadow_recurve_trial: [{ itemId:'HUNTER_LONGBOW', weight:65 }, { itemId:'SHADOW_RECURVE', weight:35 }],
+  quiver_zero_protocol: [{ itemId:'QUIVER_ZERO', weight:75 }, { itemId:'LEECH_SPIKE', weight:25 }],
+  monarch_helm_scan: [{ itemId:'OBLIVION_CROWN', weight:65 }, { itemId:'MONARCH_HELM', weight:35 }],
+  vagal_amulet_recovery: [{ itemId:'ECHO_AMULET', weight:70 }, { itemId:'VAGAL_AMULET', weight:30 }],
+  lucid_ring_alpha: [{ itemId:'LUCID_RING_ALPHA', weight:70 }, { itemId:'IRON_LOOP', weight:30 }],
+  co2_loop_dive: [{ itemId:'CO2_LOOP', weight:70 }, { itemId:'GHOST_RING', weight:30 }],
+  iron_heart_forge: [{ itemId:'IRON_HEART_CUIRASS', weight:75 }, { itemId:'TITAN_PLATE', weight:25 }],
+  grip_protocol_gloves: [{ itemId:'GRIP_PROTOCOL', weight:70 }, { itemId:'SURGE_GAUNTLETS', weight:30 }],
+  core_bind_belt: [{ itemId:'REINFORCED_SASH', weight:65 }, { itemId:'CORE_BIND', weight:35 }],
+  stalker_boots_run: [{ itemId:'STALKER_BOOTS', weight:70 }, { itemId:'PHANTOM_BOOTS', weight:30 }],
+  crimson_flask_brew: [{ itemId:'CRIMSON_FLASK', weight:70 }, { itemId:'GOLDEN_FLASK', weight:30 }],
+  azure_flask_sync: [{ itemId:'AZURE_FLASK', weight:70 }, { itemId:'VOID_FLASK', weight:30 }],
+};
+
+const BOSS_DROP_TABLES = {
+  ANXIETY_WRAITH: [{ itemId:'ANXIETY_WARD', weight:100 }],
+  LETHARGY_GOLEM: [{ itemId:'GOLEM_CORE', weight:100 }],
+  PROCRASTINATION_LEECH: [{ itemId:'LEECH_SPIKE', weight:100 }],
+  ANGER_BERSERKER: [{ itemId:'BERSERKER_EMBLEM', weight:100 }],
+  SHAME_SIREN: [{ itemId:'SHAME_MASK', weight:100 }],
+  PANIC_HYDRA: [{ itemId:'PANIC_CHAIN', weight:100 }],
+  ISOLATION_WEAVER: [{ itemId:'WEAVER_CLOAK', weight:100 }],
+  PERFECTION_JUDGE: [{ itemId:'JUDGE_SEAL', weight:100 }],
+  ENVY_CHIMERA: [{ itemId:'CHIMERA_EYE', weight:100 }],
+};
+
+const BOSS_SET_UPGRADES = {
+  ANXIETY_WRAITH: { setId:'MONARCH_SYNTH', bonuses:{ VAG:1 } },
+  LETHARGY_GOLEM: { setId:'IRON_HEART', bonuses:{ RES:1 } },
+  PROCRASTINATION_LEECH: { setId:'SHADOWFORGED', bonuses:{ DIS:1 } },
+  ANGER_BERSERKER: { setId:'IRON_HEART', bonuses:{ STR:1 } },
+  SHAME_SIREN: { setId:'MONARCH_SYNTH', bonuses:{ CHA:1 } },
+  PANIC_HYDRA: { setId:'MONARCH_SYNTH', bonuses:{ CO2:1 } },
+  ISOLATION_WEAVER: { setId:'SHADOWFORGED', bonuses:{ EMP:1 } },
+  PERFECTION_JUDGE: { setId:'IRON_HEART', bonuses:{ DIS:1 } },
+  ENVY_CHIMERA: { setId:'SHADOWFORGED', bonuses:{ ADA:1 } },
+};
+
+const FLASK_EFFECTS = {
+  CRIMSON_FLASK: { name:'Crimson Flask Burst', icon:'🧪', cooldownMs: 1000 * 60 * 8, buffId:'IRON_HEART' },
+  GOLDEN_FLASK: { name:'Golden Flask Surge', icon:'🍯', cooldownMs: 1000 * 60 * 12, buffId:'XP_CRYSTAL' },
+  AZURE_FLASK: { name:'Azure Flask Focus', icon:'🧴', cooldownMs: 1000 * 60 * 8, buffId:'FOCUS_SHARD' },
+  VOID_FLASK: { name:'Void Flask Overclock', icon:'🧿', cooldownMs: 1000 * 60 * 14, buffId:'NEURAL_SURGE' },
+};
+
+const MATERIAL_CATALOG = {
+  SHADOW_SHARD: { id:'SHADOW_SHARD', name:'Shadow Shard', icon:'🌑', desc:'Frammento da mobility, stealth e output rapido.' },
+  MONARCH_FRAGMENT: { id:'MONARCH_FRAGMENT', name:'Monarch Fragment', icon:'👁', desc:'Scheggia cognitiva per set da focus, social e scan.' },
+  IRON_ORE: { id:'IRON_ORE', name:'Iron Ore', icon:'⛓️', desc:'Materiale da resilienza, tankiness e build ad alta tenuta.' },
+  BOSS_CORE: { id:'BOSS_CORE', name:'Boss Core', icon:'💠', desc:'Catalizzatore raro necessario per i livelli di forge superiori.' },
+};
+
+const SET_PRIMARY_MATERIAL = {
+  SHADOWFORGED: 'SHADOW_SHARD',
+  MONARCH_SYNTH: 'MONARCH_FRAGMENT',
+  IRON_HEART: 'IRON_ORE',
+};
+
+const UPGRADE_MAX_LEVEL = 3;
+const UPGRADE_RARITY_BASE = {
+  RARE: { main: 2, core: 0 },
+  EPIC: { main: 3, core: 1 },
+  LEGENDARY: { main: 4, core: 1 },
 };
 
 // ========================
@@ -716,6 +1473,115 @@ const TITLES = [
   {lv:60,t:'Monarch of Flow'},{lv:80,t:'Shadow Monarch'},{lv:120,t:'Transcendent'},
 ];
 
+const AVATAR_EMOJI_OPTIONS = ['🛡️','⚡','🧠','🔥','🌑','👁️','🧬','🦁','🐺','🦅','🦊','🐉'];
+const AVATAR_COLOR_OPTIONS = ['#00D4FF','#9050FF','#FF3366','#FFB800','#00FF88','#44DDFF','#FF8844','#BB77FF'];
+
+const LEGACY_100_LIST = [
+  'Vedere l’alba da una montagna',
+  'Nuotare in un lago glaciale',
+  'Scrivere un manifesto personale',
+  'Imparare una lingua nuova',
+  'Dormire sotto le stelle',
+  'Leggere 100 libri fondamentali',
+  'Fare un viaggio da solo',
+  'Correre una mezza maratona',
+  'Imparare a meditare davvero',
+  'Dire una verità che stai evitando',
+  'Visitare il Giappone',
+  'Vedere l’aurora boreale',
+  'Creare un progetto artistico tuo',
+  'Pubblicare qualcosa di importante',
+  'Imparare a cucinare 10 piatti forti',
+  'Passare una settimana offline',
+  'Imparare un’arte marziale',
+  'Andare in Islanda',
+  'Imparare a suonare uno strumento',
+  'Costruire una morning routine solida',
+  'Fare volontariato serio',
+  'Visitare una foresta antica',
+  'Fare un discorso pubblico memorabile',
+  'Lanciare un business o side project',
+  'Vedere un deserto vero',
+  'Imparare a nuotare bene',
+  'Camminare per 30 km in un giorno',
+  'Imparare il primo soccorso',
+  'Portare a termine un anno di journaling',
+  'Fare pace con una paura storica',
+  'Vivere un mese all’estero',
+  'Visitare una grande biblioteca storica',
+  'Creare un album di ricordi importante',
+  'Imparare a gestire il denaro con disciplina',
+  'Vedere una finale sportiva dal vivo',
+  'Imparare a danzare',
+  'Scrivere una lettera a te stesso del futuro',
+  'Disintossicarti da un’abitudine tossica',
+  'Fare una notte intera in rifugio',
+  'Imparare a respirare sotto stress',
+  'Visitare un tempio o monastero',
+  'Avere il fisico migliore della tua vita',
+  'Chiudere una relazione tossica',
+  'Imparare a fotografare bene',
+  'Passare una giornata intera in silenzio',
+  'Guidare lungo una costa iconica',
+  'Fare un retreat personale',
+  'Imparare a fare pane o pizza perfetti',
+  'Guardare un’eclissi o pioggia meteorica',
+  'Imparare a difenderti in acqua',
+  'Vedere New York almeno una volta',
+  'Vivere una settimana in montagna',
+  'Trovare una causa che senti tua',
+  'Leggere i classici che contano davvero',
+  'Creare una stanza o studio ideale',
+  'Fare un viaggio in treno epico',
+  'Imparare a stare da solo senza scappare',
+  'Fare un tatuaggio simbolico o decidere di non farlo con coscienza',
+  'Mangiare in un ristorante stellato o leggendario',
+  'Avere una conversazione che ti cambia',
+  'Vedere Roma di notte da solo',
+  'Visitare un vulcano',
+  'Imparare a scalare',
+  'Dormire in tenda in un luogo remoto',
+  'Costruire una collezione significativa',
+  'Scrivere un testo o libro lungo',
+  'Portare i genitori o chi ami in un viaggio bello',
+  'Imparare a lasciare andare il controllo',
+  'Fare un anno senza fumare o vizio dominante',
+  'Creare una playlist della tua vita',
+  'Imparare a stare sul palco',
+  'Vedere un concerto da sogno',
+  'Camminare in una città sconosciuta all’alba',
+  'Avere una libreria piena di libri amati',
+  'Fare un bagno in mare in inverno',
+  'Imparare a dire no senza colpa',
+  'Chiudere un progetto fermo da anni',
+  'Imparare a scrivere bene a mano',
+  'Fare un’esperienza in vela o barca',
+  'Imparare una skill manuale concreta',
+  'Vivere un giorno perfetto progettato da te',
+  'Vedere un grande museo mondiale',
+  'Rivedere i luoghi della tua infanzia',
+  'Imparare a dormire bene in modo stabile',
+  'Raggiungere una vera pace col corpo',
+  'Trovare un luogo nel mondo che senti casa',
+  'Avere un amico o alleato assoluto',
+  'Fare una traversata lunga a piedi',
+  'Imparare a parlare in modo magnetico',
+  'Andare a un festival o evento unico',
+  'Creare una tradizione tua',
+  'Fare una foto di cui sarai fiero per sempre',
+  'Insegnare a qualcuno qualcosa che conta',
+  'Vedere la neve in un luogo iconico',
+  'Toccare un livello vero di disciplina',
+  'Imparare a stare nel presente',
+  'Costruire un’eredità digitale o reale',
+  'Fare una dichiarazione d’amore o stima sincera',
+  'Chiudere i conti con una ferita del passato',
+  'Vivere almeno un anno sentendoti pienamente te stesso',
+  'Creare la tua lista definitiva di valori',
+  'Avere una casa o base che ti rappresenti',
+  'Lasciare il mondo un po’ migliore di come l’hai trovato',
+];
+
 const RANK_TABLE = [{r:'S',d:9},{r:'A',d:7},{r:'B',d:5},{r:'C',d:4},{r:'D',d:2},{r:'E',d:0}];
 
 // ========================
@@ -727,6 +1593,7 @@ const DEFAULT_STATE = {
   playerName: '',
   playerClass: null,
   classLevel: 1,
+  onboardingRank: 1,
   stats: {},
   totalXP: 0,
   currentStreak: 0,
@@ -751,21 +1618,35 @@ const DEFAULT_STATE = {
   todayCompletedDetails: [],
   questTab: 'corpo',
   customQuests: [],
+  ownedEquipment: [],
+  equippedGear: createEmptyGearSlots(),
+  specialQuestCompleted: [],
+  setUpgrades: {},
+  flaskCooldowns: {},
+  materials: {},
+  equipmentUpgrades: {},
+  codexTab: 'rank',
+  bucketListChecks: {},
+  avatarEmoji: '🛡️',
+  avatarColor: '#00D4FF',
+  profileStrengths: '',
+  profileWeaknesses: '',
+  profileFears: '',
+  bossTitles: [],
+  activeBossTitle: null,
 };
 
-let state = { ...DEFAULT_STATE };
+let state = loadState(); // Carica subito da localStorage
 
 // Helper: find quest by ID across built-in + custom
 function findQuestById(id) {
-  return QUEST_DEFINITIONS.find(q => q.id === id) || (state.customQuests || []).find(q => q.id === id);
+  return QUEST_DEFINITIONS.find(q => q.id === id)
+    || SPECIAL_QUESTS.find(q => q.id === id)
+    || (state.customQuests || []).find(q => q.id === id);
 }
 
 function loadState() {
-  try {
-    const s = localStorage.getItem('neuro_leveling_v2');
-    if (s) { const p = JSON.parse(s); return { ...DEFAULT_STATE, ...p }; }
-  } catch(_){}
-  return { ...DEFAULT_STATE };
+  return readStoredState() || { ...DEFAULT_STATE };
 }
 
 function initStats() {
@@ -779,9 +1660,61 @@ function initStats() {
 // GAME LOGIC HELPERS
 // ========================
 
-function xpForLevel(lv) { return Math.floor(100 * Math.pow(lv, 1.5)); }
+function xpForLevel(lv) { return Math.floor(28 + Math.pow(lv, 1.28) * 18); }
+
+function xpForHunterRank(rank) {
+  return Math.floor(36 + Math.pow(rank, 1.24) * 18);
+}
 
 function getStatLv(id) { return state.stats[id]?.lv ?? 1; }
+
+function getEquipmentBonusForStat(statId) {
+  const equipped = state.equippedGear || {};
+  const itemBonus = Object.values(equipped).reduce((sum, itemId) => {
+    if (!itemId) return sum;
+    const item = EQUIPMENT_CATALOG[itemId];
+    return sum + (getItemBonuses(item)?.[statId] || 0);
+  }, 0);
+  return itemBonus + getSetBonusForStat(statId) + getSetUpgradeBonusForStat(statId);
+}
+
+function getEquippedSetCounts() {
+  return Object.values(state.equippedGear || {}).reduce((acc, itemId) => {
+    const setId = itemId ? EQUIPMENT_CATALOG[itemId]?.set : null;
+    if (!setId) return acc;
+    acc[setId] = (acc[setId] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function getActiveSetBonuses() {
+  const counts = getEquippedSetCounts();
+  return Object.entries(counts).map(([setId, count]) => {
+    const setDef = EQUIPMENT_SET_BONUSES[setId];
+    if (!setDef) return null;
+    const activeThresholds = Object.keys(setDef.thresholds)
+      .map(Number)
+      .filter(threshold => count >= threshold)
+      .sort((a, b) => a - b);
+    if (!activeThresholds.length) return null;
+    return {
+      setId,
+      count,
+      setDef,
+      bonuses: activeThresholds.map(threshold => ({ threshold, stats: setDef.thresholds[threshold] })),
+    };
+  }).filter(Boolean);
+}
+
+function getSetBonusForStat(statId) {
+  return getActiveSetBonuses().reduce((sum, bonus) => {
+    return sum + bonus.bonuses.reduce((inner, thresholdBonus) => inner + (thresholdBonus.stats[statId] || 0), 0);
+  }, 0);
+}
+
+function getEffectiveStatLv(id) {
+  return getStatLv(id) + getEquipmentBonusForStat(id);
+}
 
 function addStatXP(id, amount) {
   if (!state.stats[id]) state.stats[id] = { lv:1, xp:0 };
@@ -795,14 +1728,130 @@ function addStatXP(id, amount) {
 }
 
 function getTotalLevel() {
-  return PRIMARY_STATS.reduce((a,s) => a + getStatLv(s.id), 0);
+  return getHunterRankInfo().rank;
 }
 
-function getTitle() {
+function getHunterRankInfo() {
+  let rank = Math.max(1, Math.min(20, state.onboardingRank || 1));
+  let xpPool = Math.max(0, state.totalXP || 0);
+  while (rank < 99) {
+    const need = xpForHunterRank(rank + 1);
+    if (xpPool < need) return { rank, xpIntoRank: xpPool, nextXp: need };
+    xpPool -= need;
+    rank++;
+  }
+  return { rank: 99, xpIntoRank: 0, nextXp: 0 };
+}
+
+function getRankTitle() {
   const lv = getTotalLevel();
   let title = 'Neophyte';
   for (const t of TITLES) { if (lv >= t.lv) title = t.t; }
   return title;
+}
+
+function getUnlockedRankTitles() {
+  const lv = getTotalLevel();
+  return TITLES.filter(t => lv >= t.lv).map(t => t.t);
+}
+
+function getSelectableTitles() {
+  const rankTitles = getUnlockedRankTitles().map(title => ({ title, origin:'rank' }));
+  const bossTitles = [...new Set(state.bossTitles || [])].map(title => ({ title, origin:'boss' }));
+  const merged = [...rankTitles, ...bossTitles];
+  return merged.filter((entry, index) => merged.findIndex(other => other.title === entry.title) === index);
+}
+
+function setActiveTitle(title) {
+  state.activeBossTitle = title || null;
+  saveState();
+}
+
+function getTitle() {
+  if (state.activeBossTitle) return state.activeBossTitle;
+  return getRankTitle();
+}
+
+function scoreQuestAgainstSignals(quest, signals, source) {
+  if (!signals.length) return 0;
+  let score = 0;
+  for (const signal of signals) {
+    if ((signal.questIds || []).includes(quest.id)) score += source === 'strengths' ? 6 : 8;
+    if ((signal.stats || []).some(statId => quest.rewards.some(reward => reward.stat === statId))) score += source === 'strengths' ? 3 : 4;
+    if ((signal.stats || []).some(statId => quest.req.some(req => req.stat === statId))) score += 1;
+  }
+  if (source === 'strengths' && quest.type === 'SPECIAL') score += 1;
+  if (source !== 'strengths' && quest.type === 'RECOVERY') score += 2;
+  return score;
+}
+
+function scoreBossAgainstSignals(boss, signals, source) {
+  if (!signals.length) return 0;
+  let score = 0;
+  for (const signal of signals) {
+    if ((signal.bossIds || []).includes(boss.id)) score += source === 'strengths' ? 5 : 9;
+    if ((signal.stats || []).some(statId => boss.req.some(req => req.stat === statId))) score += 2;
+  }
+  if (source === 'fears') score += 1;
+  return score;
+}
+
+function chooseRecommendedQuest(source) {
+  const text = source === 'strengths' ? state.profileStrengths : source === 'weaknesses' ? state.profileWeaknesses : state.profileFears;
+  const signals = getTraitSignals(text);
+  const available = getAvailableQuests(state.assessmentHistory[state.assessmentHistory.length - 1] || null)
+    .filter(quest => !getDoneInfo(quest.id));
+  if (!available.length) return null;
+
+  const scored = available
+    .map(quest => ({ quest, score: scoreQuestAgainstSignals(quest, signals, source) }))
+    .sort((a, b) => b.score - a.score || a.quest.diff - b.quest.diff);
+
+  if (scored[0]?.score > 0) return scored[0].quest;
+
+  if (source === 'strengths') return available.find(quest => quest.type === 'SPECIAL') || available[0];
+  if (source === 'weaknesses') return available.find(quest => quest.type === 'RECOVERY' || quest.cat === 'NEURAL') || available[0];
+  return available.find(quest => quest.cat === 'SOCIAL' || quest.cat === 'NEURAL') || available[0];
+}
+
+function chooseSuggestedBoss(source) {
+  const text = source === 'strengths' ? state.profileStrengths : source === 'weaknesses' ? state.profileWeaknesses : state.profileFears;
+  const signals = getTraitSignals(text);
+  const bosses = BOSS_DEFINITIONS.filter(boss => !state.bossesDefeated.includes(boss.id));
+  if (!bosses.length) return null;
+
+  const scored = bosses
+    .map(boss => ({ boss, score: scoreBossAgainstSignals(boss, signals, source), ready: meetsReq(boss.req) }))
+    .sort((a, b) => Number(b.ready) - Number(a.ready) || b.score - a.score || a.boss.level - b.boss.level);
+
+  if (scored[0]?.score > 0) return scored[0].boss;
+
+  if (source === 'strengths') return scored.find(entry => entry.ready)?.boss || scored[0].boss;
+  if (source === 'weaknesses') return bosses.find(boss => !meetsReq(boss.req)) || bosses[0];
+  return bosses.find(boss => ['ANXIETY_WRAITH','PANIC_HYDRA','SHAME_SIREN'].includes(boss.id)) || bosses[0];
+}
+
+function getProfileRecommendations() {
+  return {
+    strengths: {
+      label: TRAIT_SOURCE_LABELS.strengths,
+      text: state.profileStrengths,
+      quest: chooseRecommendedQuest('strengths'),
+      boss: chooseSuggestedBoss('strengths'),
+    },
+    weaknesses: {
+      label: TRAIT_SOURCE_LABELS.weaknesses,
+      text: state.profileWeaknesses,
+      quest: chooseRecommendedQuest('weaknesses'),
+      boss: chooseSuggestedBoss('weaknesses'),
+    },
+    fears: {
+      label: TRAIT_SOURCE_LABELS.fears,
+      text: state.profileFears,
+      quest: chooseRecommendedQuest('fears'),
+      boss: chooseSuggestedBoss('fears'),
+    },
+  };
 }
 
 function getRank(diff) {
@@ -826,7 +1875,221 @@ function getDebuffPenalty(statId) {
 }
 
 function meetsReq(reqs) {
-  return reqs.every(r => getStatLv(r.stat) >= r.minLv);
+  return reqs.every(r => getEffectiveStatLv(r.stat) >= r.minLv);
+}
+
+function getOwnedEquipmentItems() {
+  return (state.ownedEquipment || [])
+    .map(id => EQUIPMENT_CATALOG[id])
+    .filter(Boolean)
+    .sort((a, b) => EQUIPMENT_SLOTS.indexOf(a.slot) - EQUIPMENT_SLOTS.indexOf(b.slot));
+}
+
+function rollLootTable(table) {
+  if (!Array.isArray(table) || !table.length) return null;
+  const total = table.reduce((sum, entry) => sum + (entry.weight || 0), 0);
+  let roll = Math.random() * total;
+  for (const entry of table) {
+    roll -= entry.weight || 0;
+    if (roll <= 0) return entry.itemId;
+  }
+  return table[table.length - 1].itemId;
+}
+
+function getQuestDropItemId(quest) {
+  return rollLootTable(SPECIAL_QUEST_LOOT_TABLES[quest.id]) || quest.equipmentId || null;
+}
+
+function getQuestLootItems(quest) {
+  const itemIds = (SPECIAL_QUEST_LOOT_TABLES[quest.id] || [{ itemId: quest.equipmentId, weight: 100 }])
+    .map(entry => entry.itemId)
+    .filter(Boolean);
+  return [...new Set(itemIds)].map(itemId => EQUIPMENT_CATALOG[itemId]).filter(Boolean);
+}
+
+function getSlotBlueprintQuests(slot) {
+  return SPECIAL_QUESTS.filter(quest => getQuestLootItems(quest).some(item => item.slot === slot));
+}
+
+function grantSetUpgrade(setId, bonuses, sourceLabel='Boss Reward') {
+  if (!setId || !bonuses) return;
+  if (!state.setUpgrades) state.setUpgrades = {};
+  const current = state.setUpgrades[setId] || {};
+  for (const [statId, amount] of Object.entries(bonuses)) {
+    current[statId] = (current[statId] || 0) + amount;
+  }
+  state.setUpgrades[setId] = current;
+  showToast(`✦ Upgrade set ${EQUIPMENT_SET_BONUSES[setId]?.name || setId}`, 'levelup');
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'SET UPGRADE',
+    title: 'SET POTENZIATO',
+    body: `${sourceLabel}: ${EQUIPMENT_SET_BONUSES[setId]?.name || setId} ora concede ${Object.entries(bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')} extra quando indossi il set.`,
+    sound: 'reward',
+  });
+}
+
+function getSetUpgradeBonusForStat(statId) {
+  return Object.values(state.setUpgrades || {}).reduce((sum, upgrade) => sum + (upgrade?.[statId] || 0), 0);
+}
+
+function getItemUpgradeLevel(itemId) {
+  return Math.max(0, Math.min(UPGRADE_MAX_LEVEL, state.equipmentUpgrades?.[itemId] || 0));
+}
+
+function getItemBonuses(item) {
+  if (!item) return {};
+  const upgradeLevel = getItemUpgradeLevel(item.id);
+  return Object.fromEntries(Object.entries(item.bonuses || {}).map(([statId, amount]) => [statId, amount + upgradeLevel]));
+}
+
+function getItemDisplayName(item) {
+  if (!item) return '';
+  const upgradeLevel = getItemUpgradeLevel(item.id);
+  return upgradeLevel > 0 ? `${item.name} +${upgradeLevel}` : item.name;
+}
+
+function getUpgradeCost(item) {
+  const currentLevel = getItemUpgradeLevel(item.id);
+  if (currentLevel >= UPGRADE_MAX_LEVEL) return null;
+  const rarityBase = UPGRADE_RARITY_BASE[item.rarity] || UPGRADE_RARITY_BASE.RARE;
+  const nextLevel = currentLevel + 1;
+  const mainMaterial = SET_PRIMARY_MATERIAL[item.set] || 'IRON_ORE';
+  return {
+    nextLevel,
+    costs: {
+      [mainMaterial]: rarityBase.main + currentLevel * 2,
+      BOSS_CORE: rarityBase.core + Math.max(0, currentLevel),
+    },
+  };
+}
+
+function hasUpgradeMaterials(costs) {
+  return Object.entries(costs || {}).every(([materialId, amount]) => (state.materials?.[materialId] || 0) >= amount);
+}
+
+function formatMaterialCost(costs) {
+  return Object.entries(costs || {})
+    .filter(([, amount]) => amount > 0)
+    .map(([materialId, amount]) => `${MATERIAL_CATALOG[materialId]?.icon || '✦'} ${amount}`)
+    .join(' · ');
+}
+
+function awardMaterial(materialId, amount=1, sourceLabel='loot') {
+  if (!MATERIAL_CATALOG[materialId]) return;
+  if (!state.materials) state.materials = {};
+  state.materials[materialId] = (state.materials[materialId] || 0) + amount;
+  showToast(`${MATERIAL_CATALOG[materialId].icon} +${amount} ${MATERIAL_CATALOG[materialId].name}`, 'xp');
+}
+
+function spendMaterials(costs) {
+  for (const [materialId, amount] of Object.entries(costs || {})) {
+    state.materials[materialId] = Math.max(0, (state.materials[materialId] || 0) - amount);
+  }
+}
+
+function upgradeEquipmentItem(itemId) {
+  const item = EQUIPMENT_CATALOG[itemId];
+  if (!item) return;
+  const upgrade = getUpgradeCost(item);
+  if (!upgrade) {
+    showToast('Pezzo gia al massimo', 'alert');
+    return;
+  }
+  if (!hasUpgradeMaterials(upgrade.costs)) {
+    showToast('Materiali insufficienti per la forge', 'alert');
+    return;
+  }
+  spendMaterials(upgrade.costs);
+  if (!state.equipmentUpgrades) state.equipmentUpgrades = {};
+  state.equipmentUpgrades[itemId] = upgrade.nextLevel;
+  saveState();
+  renderGear();
+  renderStatus();
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'FORGE',
+    title: `${item.name} +${upgrade.nextLevel}`,
+    body: `Forge completata. Le statistiche del pezzo sono aumentate e il loadout e gia stato ricalcolato.`,
+    sound: 'reward',
+  });
+}
+
+function isFlaskItem(itemId) {
+  return !!FLASK_EFFECTS[itemId];
+}
+
+function getFlaskCooldownRemaining(itemId) {
+  const until = state.flaskCooldowns?.[itemId] || 0;
+  return Math.max(0, until - Date.now());
+}
+
+function useFlask(itemId) {
+  const effect = FLASK_EFFECTS[itemId];
+  if (!effect) return;
+  if (getFlaskCooldownRemaining(itemId) > 0) {
+    showToast(`${effect.icon} Flask in cooldown`, 'alert');
+    return;
+  }
+  if (!state.flaskCooldowns) state.flaskCooldowns = {};
+  state.flaskCooldowns[itemId] = Date.now() + effect.cooldownMs;
+  addBuff(effect.buffId);
+  saveState();
+  renderGear();
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'FLASK',
+    title: `${effect.name} ATTIVATO`,
+    body: `Cooldown avviato. Effetto consumabile applicato al sistema e pronto a influenzare il prossimo run.`,
+    sound: 'reward',
+  });
+}
+
+function getEquippedItem(slot) {
+  const itemId = state.equippedGear?.[slot];
+  return itemId ? EQUIPMENT_CATALOG[itemId] : null;
+}
+
+function equipItem(itemId) {
+  const item = EQUIPMENT_CATALOG[itemId];
+  if (!item) return;
+  if (!state.ownedEquipment?.includes(itemId)) return;
+  if (!state.equippedGear) state.equippedGear = createEmptyGearSlots();
+  state.equippedGear[item.slot] = itemId;
+  saveState();
+  renderGear();
+  renderStatus();
+  showToast(`${item.icon} ${item.name} equipaggiato`, 'success');
+}
+
+function unequipItem(slot) {
+  if (!state.equippedGear?.[slot]) return;
+  state.equippedGear[slot] = null;
+  saveState();
+  renderGear();
+  renderStatus();
+}
+
+function awardEquipment(itemId) {
+  const item = EQUIPMENT_CATALOG[itemId];
+  if (!item) return;
+  if (!state.ownedEquipment) state.ownedEquipment = [];
+  if (state.ownedEquipment.includes(itemId)) {
+    if (item.set) grantSetUpgrade(item.set, Object.fromEntries(Object.keys(item.bonuses).slice(0,1).map(statId => [statId, 1])), item.name);
+    return;
+  }
+  state.ownedEquipment.push(itemId);
+  if (!state.equippedGear) state.equippedGear = createEmptyGearSlots();
+  if (!state.equippedGear[item.slot]) state.equippedGear[item.slot] = itemId;
+  showToast(`${item.icon} Equip ottenuto: ${item.name}`, 'levelup');
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'GEAR',
+    title: 'RELIQUIA ACQUISITA',
+    body: `${item.name} agganciato al loadout. Bonus attivi: ${Object.entries(item.bonuses).map(([stat,val]) => `+${val} ${stat}`).join(' · ')}. Controlla l'Armory per slot, set e stat aggiunte.`,
+    sound: 'reward',
+  });
+  if (currentScreen === 'gear') renderGear();
 }
 
 // ========================
@@ -1049,13 +2312,12 @@ function getClassLevel() {
   if (!state.playerClass) return 1;
   const cl = CLASS_DEFINITIONS.find(c=>c.id===state.playerClass);
   if (!cl) return 1;
-  let sum = 0;
-  for (const pid of cl.primary) sum += getStatLv(pid);
-  // secondary stats that derive from primary
-  for (const s of SECONDARY_STATS) {
-    if (s.derivedFrom.some(d => cl.primary.includes(d))) sum += Math.floor(getStatLv(s.id) * 0.5);
-  }
-  return Math.max(1, Math.floor(sum / cl.primary.length));
+  const primaryAvg = cl.primary.reduce((sum, pid) => sum + getStatLv(pid), 0) / cl.primary.length;
+  const supportStats = SECONDARY_STATS.filter(s => s.derivedFrom.some(d => cl.primary.includes(d)));
+  const supportAvg = supportStats.length
+    ? supportStats.reduce((sum, stat) => sum + getStatLv(stat.id), 0) / supportStats.length
+    : 1;
+  return Math.max(1, Math.round(primaryAvg * 0.7 + supportAvg * 0.35));
 }
 
 // ========================
@@ -1123,7 +2385,11 @@ function isForcedRest() {
 // ========================
 
 function getAvailableQuests(assessment) {
-  const allQuests = [...QUEST_DEFINITIONS, ...(state.customQuests || [])];
+  const allQuests = [
+    ...QUEST_DEFINITIONS,
+    ...SPECIAL_QUESTS.filter(q => !(state.specialQuestCompleted || []).includes(q.id)),
+    ...(state.customQuests || []),
+  ];
   const rest = isForcedRest();
   if (rest) return allQuests.filter(q=>q.type==='RECOVERY');
   return allQuests.filter(q => {
@@ -1164,6 +2430,7 @@ function buildSystemPrompt() {
   const cls = CLASS_DEFINITIONS.find(c => c.id === state.playerClass);
   const clsName = cls?.name ?? 'Hunter';
   const lv = getTotalLevel();
+  const classSync = getClassLevel();
   const streak = state.currentStreak;
   const lastA = state.assessmentHistory[state.assessmentHistory.length - 1];
   const debuffs = state.activeDebuffs || [];
@@ -1174,13 +2441,15 @@ function buildSystemPrompt() {
   const bossesDefeated = (state.bossesDefeated || []).length;
 
   return `Sei lo SHADOW GUIDE, un consulente neuro-tattico dentro un'app di gamification chiamata NEURO-LEVELING (ispirata a Solo Leveling).
-Rispondi SEMPRE in italiano. Sii conciso, diretto, motivante e in tema col gioco. Usa il tono di un mentore misterioso e saggio.
+Rispondi SEMPRE in italiano. Sii conciso, diretto, nerd e in tema col gioco. Usa il tono di un mentore da videogame dark-fantasy che pero sa davvero leggere biomarcatori, stress e performance.
 Non usare emoji in eccesso. Max 2-3 frasi per risposta tranne se l'utente chiede spiegazioni dettagliate.
+Mescola linguaggio scientifico e linguaggio da sistema di progressione: quest, build, raid, debuff, cooldown, scan, loadout, dungeon, boss.
+Evita frasi corporate o troppo adulte: la sensazione deve essere da sistema urgente, misterioso e coinvolgente, non da coach generico.
 
 CONTESTO GIOCATORE:
 - Nome: ${state.playerName || 'Hunter'}
-- Classe: ${clsName} (LV.${getClassLevel()})
-- Livello totale: ${lv}
+- Classe: ${clsName} (Class Sync ${classSync})
+- Hunter Rank: ${lv}
 - Streak: ${streak} giorni
 - Quest completate oggi: ${todayDone}
 - Quest totali: ${totalQuests}
@@ -1197,7 +2466,8 @@ COMPETENZE:
 - Motivazione, discipline, gestione dello stress
 - Consigli su quest, boss, stat, progressione nel gioco
 
-Rispondi alle domande del giocatore con consigli personalizzati basati sul suo profilo.`;
+Rispondi alle domande del giocatore con consigli personalizzati basati sul suo profilo.
+Quando suggerisci una mossa, rendila concreta e giocabile oggi, come se stessi assegnando il prossimo step di una build.`;
 }
 
 async function companionReplyAI(msg) {
@@ -1250,14 +2520,14 @@ function companionReplyLocal(msg) {
 
   // Greetings
   if (/^(ciao|hey|salve|buon)/.test(m))
-    return `Salve, ${clsName}. Livello totale ${lv}, streak di ${streak} giorni. Come posso aiutarti?`;
+    return `Salve, ${clsName}. Hunter Rank ${lv}, streak di ${streak} giorni. Come posso aiutarti?`;
 
   // Stats / Status
   if (/stat|livell|level|punti|profilo|come sto/.test(m)) {
     const top3 = [...PRIMARY_STATS].sort((a,b)=>getStatLv(b.id)-getStatLv(a.id)).slice(0,3);
     const weak = [...PRIMARY_STATS].sort((a,b)=>getStatLv(a.id)-getStatLv(b.id))[0];
     return `Le tue stat migliori: ${top3.map(s=>`${s.name} LV.${getStatLv(s.id)}`).join(', ')}. ` +
-      `Punto debole: ${weak.name} LV.${getStatLv(weak.id)}. Ti consiglio di lavorarci con quest mirate.`;
+      `Stat più fragile: ${weak.name} LV.${getStatLv(weak.id)}. Se la rinforzi, aumenti davvero la qualità della build.`;
   }
 
   // Quest advice
@@ -1306,7 +2576,7 @@ function companionReplyLocal(msg) {
 
   // Class
   if (/class|percorso|specializzazione|ruolo/.test(m))
-    return `La tua classe è ${clsName} (LV.${getClassLevel()}). Ogni punto nelle stat primarie della classe accelera la progressione. Continua a fare quest allineate al tuo percorso.`;
+    return `La tua classe è ${clsName} con Class Sync ${getClassLevel()}. Hunter Rank è il livello globale, mentre la Class Sync misura quanto la tua build sta diventando davvero coerente.`;
 
   // Streak
   if (/streak|cosecutiv|giorni/.test(m))
@@ -1323,7 +2593,7 @@ function companionReplyLocal(msg) {
   // Default
   const tips = [
     `Ricorda, ${clsName}: la costanza batte l'intensità. ${streak} giorni di streak è un buon inizio.`,
-    `Il tuo livello totale è ${lv}. Ogni quest completata ti avvicina al prossimo titolo.`,
+    `Il tuo Hunter Rank è ${lv}. Ogni quest completata ti avvicina al prossimo titolo.`,
     'Chiedimi di stat, quest, boss, sonno, respirazione, stress, motivazione o biohacking.',
     `Hai ${state.questsCompleted} quest completate e ${state.bossesDefeated.length} boss sconfitti. Continua così.`,
     'La neuroplasticità è dalla tua parte. Ogni protocollo eseguito crea nuovi circuiti neurali.',
@@ -1364,11 +2634,20 @@ function initOnboarding() {
     if (sl && vl) sl.addEventListener('input', () => { vl.textContent = sl.value; });
   }
 
+  renderAvatarPicker({
+    emojiContainerId: 'onbAvatarEmojiChoices',
+    colorContainerId: 'onbAvatarColorChoices',
+    previewId: 'onbAvatarPreview',
+  });
+
   // Start
   $('onbStart').addEventListener('click', () => {
     const name = $('onbName').value.trim();
     if (!name) { $('onbName').focus(); return; }
     state.playerName = name;
+    state.profileStrengths = $('onbStrengths').value.trim();
+    state.profileWeaknesses = $('onbWeaknesses').value.trim();
+    state.profileFears = $('onbFears').value.trim();
     goOnbStep(1);
   });
 
@@ -1386,9 +2665,9 @@ function initOnboarding() {
   });
 
   // Enter
-  $('onbEnter').addEventListener('click', () => {
+  $('onbEnter').addEventListener('click', async () => {
     state.onboardingDone = true;
-    saveState();
+    await saveState({ immediate: true });
     $('onboarding').classList.add('hidden');
     $('mainApp').classList.remove('hidden');
     switchScreen('status');
@@ -1405,6 +2684,9 @@ function goOnbStep(n) {
 
 function processOnboarding() {
   // Collect values
+  state.profileStrengths = $('onbStrengths').value.trim();
+  state.profileWeaknesses = $('onbWeaknesses').value.trim();
+  state.profileFears = $('onbFears').value.trim();
   const edu = parseInt($('onbEducation').value);
   const studyYears = parseInt($('onbStudyYears').value);
   const readHabit = parseInt($('onbReadHabit').value);
@@ -1447,6 +2729,10 @@ function processOnboarding() {
     state.stats[s.id] = { lv: val, xp: 0 };
   }
 
+  const primaryAvg = Object.values(primaryMap).reduce((sum, value) => sum + value, 0) / Object.keys(primaryMap).length;
+  const secondaryAvg = SECONDARY_STATS.reduce((sum, stat) => sum + state.stats[stat.id].lv, 0) / SECONDARY_STATS.length;
+  state.onboardingRank = Math.max(1, Math.min(20, Math.round(primaryAvg * 0.9 + secondaryAvg * 0.55)));
+
   // Determine class
   const cl = determineClass(primaryMap);
   state.playerClass = cl.id;
@@ -1457,7 +2743,7 @@ function processOnboarding() {
   $('classIcon').textContent = cl.icon;
   $('className').textContent = cl.name;
   $('className').dataset.text = cl.name;
-  $('classDesc').textContent = cl.desc;
+  $('classDesc').textContent = `${cl.desc} Partenza registrata: Hunter Rank ${state.onboardingRank}, Class Sync ${getClassLevel()}. Da qui in avanti sali solo con quest, boss, gear e consumabili.`;
 
   // Stats preview
   const preview = $('statsPreview');
@@ -1477,6 +2763,7 @@ function processOnboarding() {
       </div>`;
   }
 
+  renderUserAvatar(currentUser?.user_metadata || {});
   goOnbStep(7);
 }
 
@@ -1485,6 +2772,7 @@ function processOnboarding() {
 // ========================
 
 function switchScreen(name) {
+  currentScreen = name;
   $$('.screen').forEach(s => s.classList.remove('active'));
   const el = $('screen' + name.charAt(0).toUpperCase() + name.slice(1));
   if (el) el.classList.add('active');
@@ -1492,8 +2780,16 @@ function switchScreen(name) {
   triggerGlitch();
 
   if (name==='status') renderStatus();
+  else if (name==='profile') renderProfile();
+  else if (name==='codex') renderCodex();
   else if (name==='quests') renderQuests();
   else if (name==='boss') renderBossGrid();
+  else if (name==='gear') renderGear();
+
+  setTimeout(() => {
+    syncAppChromeMetrics();
+    maybeShowSystemPopup('screen-switch');
+  }, 120);
 }
 
 $$('.nav-btn').forEach(btn => {
@@ -1519,44 +2815,213 @@ function showToast(msg, type='success') {
   setTimeout(() => t.remove(), 3200);
 }
 
+function unlockSystemAudio() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  if (!_systemAudioContext) _systemAudioContext = new AudioCtx();
+  if (_systemAudioContext.state === 'suspended') _systemAudioContext.resume();
+  _systemAudioUnlocked = true;
+}
+
+function playSystemAlertSound(level='soft') {
+  if (!_systemAudioUnlocked) return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  if (!_systemAudioContext) _systemAudioContext = new AudioCtx();
+  const ctx = _systemAudioContext;
+  const now = ctx.currentTime;
+  const notes = level === 'urgent' ? [220, 330, 220, 440] : level === 'reward' ? [392, 494, 587] : [330, 392];
+
+  notes.forEach((freq, index) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = level === 'urgent' ? 'sawtooth' : 'triangle';
+    osc.frequency.setValueAtTime(freq, now + index * 0.09);
+    gain.gain.setValueAtTime(0.0001, now + index * 0.09);
+    gain.gain.exponentialRampToValueAtTime(level === 'urgent' ? 0.06 : 0.04, now + index * 0.09 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.09 + 0.16);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + index * 0.09);
+    osc.stop(now + index * 0.09 + 0.18);
+  });
+}
+
+function ensureSystemPopupLoop() {
+  if (_systemPopupInterval) return;
+  _systemPopupInterval = setInterval(() => {
+    maybeShowSystemPopup('passive');
+  }, 30000);
+}
+
+function removeSystemPopup(node) {
+  if (!node) return;
+  node.style.animation = 'sysOut .25s ease-in forwards';
+  setTimeout(() => node.remove(), 240);
+}
+
+function showSystemPopup({ title, body, tone='info', badge='SYSTEM', urgent=false, sound=null }) {
+  const layer = $('systemPopupLayer');
+  if (!layer) return;
+  _lastSystemPopupAt = Date.now();
+
+  const popup = document.createElement('div');
+  popup.className = `system-popup ${tone} ${urgent ? 'urgent' : ''}`;
+  popup.innerHTML = `
+    <button class="system-popup-close" aria-label="Chiudi">✕</button>
+    <div class="system-popup-header">
+      <span class="system-popup-badge">${badge}</span>
+      <div class="system-popup-title">${title}</div>
+    </div>
+    <div class="system-popup-body">${body}</div>
+  `;
+  layer.prepend(popup);
+  if (urgent) triggerGlitch();
+  if (sound) playSystemAlertSound(sound);
+
+  const closeBtn = popup.querySelector('.system-popup-close');
+  if (closeBtn) closeBtn.addEventListener('click', () => removeSystemPopup(popup));
+  setTimeout(() => removeSystemPopup(popup), urgent ? 9200 : 7200);
+}
+
+function getSystemPopupCandidates() {
+  const candidates = [];
+  const completedToday = (state.todayCompletedDetails || []).length;
+  const activeDebuffs = state.activeDebuffs || [];
+  const today = new Date().toDateString();
+
+  if ((!state.lastAssessmentDate || state.lastAssessmentDate !== today) && currentScreen !== 'assess') {
+    candidates.push({
+      tone: 'warning',
+      badge: 'SYSTEM ALERT',
+      title: 'SCAN GIORNALIERO MANCANTE',
+      body: 'Il Quest Board e in modalita approssimativa. Avvia subito l\'assessment per riallineare biomarcatori, danger rating e drop consigliati.',
+      urgent: true,
+      sound: 'urgent',
+    });
+  }
+
+  if (activeDebuffs.length > 0) {
+    candidates.push({
+      tone: 'warning',
+      badge: 'WARNING',
+      title: 'DEBUFF HOSTILI RILEVATI',
+      body: `Sono attivi ${activeDebuffs.length} debuff. Priorita assoluta a recovery, respirazione e reset vagale prima di forzare un raid difficile.`,
+      urgent: true,
+      sound: 'urgent',
+    });
+  }
+
+  if (currentScreen === 'quests' && currentQuests.length > 0) {
+    const nextQuest = currentQuests[0];
+    candidates.push({
+      tone: 'info',
+      badge: 'QUEST FEED',
+      title: 'MISSIONE PRIORITARIA DISPONIBILE',
+      body: `${nextQuest.icon} ${nextQuest.name} e in coda nel board. Rating di minaccia ${nextQuest.diff}/10. Entraci ora e capitalizza il momentum.`,
+      sound: 'soft',
+    });
+  }
+
+  if (completedToday >= 3) {
+    candidates.push({
+      tone: 'reward',
+      badge: 'CHAIN',
+      title: 'COMBO WINDOW APERTA',
+      body: `Hai completato ${completedToday} quest oggi. Momentum alto: continua il run per stackare streak, combo e possibili drop.`,
+      sound: 'reward',
+    });
+  }
+
+  if (state.bossesDefeated.length === 0 && currentScreen === 'status') {
+    candidates.push({
+      tone: 'info',
+      badge: 'BOSS',
+      title: 'BOSS CHAMBER BLOCCATA',
+      body: 'La camera del boss non ti riconosce ancora come minaccia. Farma livelli, gear e quest chiave per forzare l\'ingresso.',
+    });
+  }
+
+  return candidates;
+}
+
+function maybeShowSystemPopup(trigger='passive', forcedPopup=null) {
+  if (document.hidden) return;
+  if (forcedPopup) {
+    showSystemPopup(forcedPopup);
+    return;
+  }
+  if (!currentUser) return;
+
+  const minGap = trigger === 'passive' ? 35000 : 12000;
+  if (Date.now() - _lastSystemPopupAt < minGap) return;
+
+  const candidates = getSystemPopupCandidates();
+  if (!candidates.length) return;
+
+  const chance = trigger === 'passive' ? 0.35 : 0.55;
+  if (Math.random() > chance) return;
+
+  const popup = candidates[Math.floor(Math.random() * candidates.length)];
+  showSystemPopup(popup);
+}
+
 // ========================
 // RENDER: STATUS
 // ========================
 
 function renderStatus() {
+  ensureSystemPopupLoop();
   const nm = $('playerNameLg');
   nm.textContent = state.playerName || 'HUNTER';
   nm.dataset.text = nm.textContent;
 
   const cl = CLASS_DEFINITIONS.find(c=>c.id===state.playerClass);
-  $('playerClassBadge').textContent = cl ? `${cl.icon} ${cl.name} LV.${getClassLevel()}` : '';
+  $('playerClassBadge').textContent = cl ? `${cl.icon} ${cl.name} · Class Sync ${getClassLevel()}` : '';
   $('playerTitleBar').textContent = getTitle();
-  $('totalLvPill').textContent = getTotalLevel();
+  const rankInfo = getHunterRankInfo();
+  $('totalLvPill').textContent = rankInfo.rank;
 
-  // XP bar — combined residual XP of all stats vs combined next-level threshold
-  const ALL_STATS = [...PRIMARY_STATS, ...SECONDARY_STATS];
-  let xpCur = 0, xpNeed = 0;
-  for (const s of ALL_STATS) {
-    const lv = getStatLv(s.id);
-    xpCur += state.stats[s.id]?.xp ?? 0;
-    xpNeed += xpForLevel(lv + 1);
-  }
-  const pct = xpNeed > 0 ? Math.min((xpCur / xpNeed) * 100, 100) : 0;
+  // XP bar — hunter rank progression from total earned XP after onboarding rank
+  const pct = rankInfo.nextXp > 0 ? Math.min((rankInfo.xpIntoRank / rankInfo.nextXp) * 100, 100) : 100;
   $('xpBarFill').style.width = pct+'%';
-  $('xpCur').textContent = xpCur;
-  $('xpNext').textContent = xpNeed;
+  $('xpCur').textContent = rankInfo.xpIntoRank;
+  $('xpNext').textContent = rankInfo.nextXp;
+
+  const guide = $('systemGuideCard');
+  if (guide) {
+    const recommendations = getProfileRecommendations();
+    guide.innerHTML = `
+      <div class="system-guide-title">COME LEGGERE IL SISTEMA</div>
+      <div class="system-guide-copy">Hunter Rank è il tuo livello vero e sale con quest e boss. Class Sync misura quanto la tua build è allineata alla classe scelta. Le stat mostrano la forza dei singoli attributi, con bonus da gear e set già inclusi.</div>
+      <div class="system-guide-mini">
+        <div class="system-guide-pill">Hunter Rank ${rankInfo.rank} · progressione account</div>
+        <div class="system-guide-pill">Class Sync ${getClassLevel()} · potenza specializzazione</div>
+      </div>
+      <div class="trait-reco-grid">
+        ${Object.values(recommendations).map(entry => `
+          <div class="trait-reco-card">
+            <div class="trait-reco-label">${entry.label}</div>
+            <div class="trait-reco-copy">${entry.text || 'Non ancora definito nell\'assessment.'}</div>
+            <div class="trait-reco-target">${entry.quest ? `${entry.quest.icon} Quest: ${entry.quest.name}` : 'Quest: in attesa di dati'}</div>
+            <div class="trait-reco-target">${entry.boss ? `${entry.boss.icon} Boss: ${entry.boss.name}` : 'Boss: nessun target disponibile'}</div>
+          </div>`).join('')}
+      </div>`;
+  }
 
   // Primary stats
   const priEl = $('statsPrimary');
   priEl.innerHTML = PRIMARY_STATS.map(s => {
     const lv = getStatLv(s.id);
+    const bonus = getEquipmentBonusForStat(s.id);
+    const shownLv = lv + bonus;
     const xpN = xpForLevel(lv+1);
     const xpC = state.stats[s.id]?.xp ?? 0;
     const pct = Math.min((xpC/Math.max(xpN,1))*100, 100);
     return `<div class="stat-row">
       <div class="stat-icon">${s.icon}</div>
       <div class="stat-info">
-        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${lv}</span></div>
+        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${shownLv}${bonus ? ` (+${bonus})` : ''}</span></div>
         <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%;background:${s.color}"></div></div>
       </div>
     </div>`;
@@ -1566,13 +3031,15 @@ function renderStatus() {
   const secEl = $('statsSecondary');
   secEl.innerHTML = SECONDARY_STATS.map(s => {
     const lv = getStatLv(s.id);
+    const bonus = getEquipmentBonusForStat(s.id);
+    const shownLv = lv + bonus;
     const xpN = xpForLevel(lv+1);
     const xpC = state.stats[s.id]?.xp ?? 0;
     const pct = Math.min((xpC/Math.max(xpN,1))*100, 100);
     return `<div class="stat-row">
       <div class="stat-icon">${s.icon}</div>
       <div class="stat-info">
-        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${lv}</span></div>
+        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${shownLv}${bonus ? ` (+${bonus})` : ''}</span></div>
         <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%;background:${s.color}"></div></div>
       </div>
     </div>`;
@@ -1636,6 +3103,73 @@ function renderStatus() {
   }
 }
 
+function renderProfile() {
+  const root = $('screenProfile');
+  if (!root) return;
+  const titleGrid = $('profileTitleGrid');
+  const recGrid = $('profileRecommendations');
+  const summary = $('profileSummary');
+  const avatar = getAvatarConfig();
+  const recommendations = getProfileRecommendations();
+  const titles = getSelectableTitles();
+
+  summary.innerHTML = `
+    <div class="profile-summary-card">
+      <div class="profile-summary-head">
+        <div class="profile-avatar-large" style="background:linear-gradient(135deg, ${avatar.color}, #0a1020)">${avatar.emoji}</div>
+        <div>
+          <div class="profile-summary-name">${state.playerName || 'Hunter'}</div>
+          <div class="profile-summary-meta">${getTitle()} · Hunter Rank ${getTotalLevel()} · Class Sync ${getClassLevel()}</div>
+        </div>
+      </div>
+      <div class="profile-trait-stack">
+        <div class="profile-trait-line"><strong>Punti forti:</strong> ${state.profileStrengths || 'Non definiti'}</div>
+        <div class="profile-trait-line"><strong>Punti deboli:</strong> ${state.profileWeaknesses || 'Non definiti'}</div>
+        <div class="profile-trait-line"><strong>Paure:</strong> ${state.profileFears || 'Non definite'}</div>
+      </div>
+    </div>`;
+
+  titleGrid.innerHTML = `
+    <button class="title-choice ${!state.activeBossTitle ? 'active' : ''}" data-title-value="">
+      <span class="title-choice-origin">AUTO</span>
+      <span class="title-choice-name">${getRankTitle()}</span>
+    </button>
+    ${titles.map(entry => `
+      <button class="title-choice ${state.activeBossTitle === entry.title ? 'active' : ''}" data-title-value="${entry.title}">
+        <span class="title-choice-origin">${entry.origin === 'boss' ? 'BOSS' : 'RANK'}</span>
+        <span class="title-choice-name">${entry.title}</span>
+      </button>`).join('')}`;
+
+  recGrid.innerHTML = Object.entries(recommendations).map(([key, entry]) => `
+    <div class="profile-reco-card profile-reco-${key}">
+      <div class="profile-reco-head">
+        <span class="profile-reco-badge">${entry.label}</span>
+        <span class="profile-reco-source">${entry.text || 'Non definito'}</span>
+      </div>
+      <div class="profile-reco-body">
+        <div class="profile-reco-block">
+          <div class="profile-reco-title">Quest consigliata</div>
+          <div class="profile-reco-copy">${entry.quest ? `${entry.quest.icon} ${entry.quest.name}` : 'Nessuna quest disponibile.'}</div>
+          <div class="profile-reco-sub">${entry.quest ? entry.quest.desc : 'Completa altre missioni o assessment.'}</div>
+        </div>
+        <div class="profile-reco-block">
+          <div class="profile-reco-title">Boss suggerito</div>
+          <div class="profile-reco-copy">${entry.boss ? `${entry.boss.icon} ${entry.boss.name}` : 'Nessun boss disponibile.'}</div>
+          <div class="profile-reco-sub">${entry.boss ? `${entry.boss.title}. ${meetsReq(entry.boss.req) ? 'Puoi affrontarlo ora.' : `Prima alza: ${entry.boss.req.filter(req => !meetsReq([req])).map(req => `${req.stat} ${req.minLv}`).join(' · ')}`}` : 'Continua la progressione per sbloccare nuovi target.'}</div>
+        </div>
+      </div>
+    </div>`).join('');
+
+  titleGrid.querySelectorAll('[data-title-value]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setActiveTitle(btn.dataset.titleValue || null);
+      renderStatus();
+      renderProfile();
+      showToast(btn.dataset.titleValue ? `Titolo attivo: ${btn.dataset.titleValue}` : 'Titolo automatico attivato', 'success');
+    });
+  });
+}
+
 // ========================
 // RENDER: QUESTS
 // ========================
@@ -1644,15 +3178,35 @@ let currentQuests = [];
 let questTab = 'corpo';
 
 const QUEST_TAB_DEFS = [
-  { id:'corpo',    label:'💪 CORPO',     filter: q => q.cat === 'PHYSIQUE' },
-  { id:'mente',    label:'🧠 MENTE',     filter: q => q.cat === 'COGNITIVE' || q.cat === 'NEURAL' },
-  { id:'emozioni', label:'💜 EMOZIONI',   filter: q => q.cat === 'SOCIAL' || q.type === 'RECOVERY' },
-  { id:'timed',    label:'⏱ TIMED',      filter: q => !!q.timed },
-  { id:'nontimed', label:'📋 NON TIMED', filter: q => !q.timed },
+  { id:'corpo',    label:'💪 CORPO',      slots: 6, filter: q => q.cat === 'PHYSIQUE' },
+  { id:'mente',    label:'🧠 MENTE',      slots: 6, filter: q => q.cat === 'COGNITIVE' || q.cat === 'NEURAL' },
+  { id:'emozioni', label:'💜 EMOZIONI',   slots: 6, filter: q => q.cat === 'SOCIAL' || q.type === 'RECOVERY' },
+  { id:'special',  label:'✦ SPECIAL',    slots: 4, filter: q => q.type === 'SPECIAL' },
+  { id:'timed',    label:'⏱ TIMED',      slots: 5, filter: q => !!q.timed },
+  { id:'nontimed', label:'📋 NON TIMED', slots: 6, filter: q => !q.timed },
+  { id:'completed',label:'✅ COMPLETATE', filter: null },
   { id:'weekly',   label:'WEEKLY',        filter: null },
   { id:'chains',   label:'CHAINS',        filter: null },
   { id:'custom',   label:'CUSTOM',        filter: null },
 ];
+
+function getVisibleDailyQuests(allQuests, tabDef) {
+  const filtered = tabDef?.filter ? allQuests.filter(tabDef.filter) : allQuests;
+  const doneIds = new Set(state.todayCompleted || []);
+  const active = filtered.filter(q => !doneIds.has(q.id));
+  return active.slice(0, tabDef?.slots || active.length);
+}
+
+function getCompletedDailyQuestEntries() {
+  return (state.todayCompletedDetails || [])
+    .map((detail, index) => ({
+      ...detail,
+      quest: findQuestById(detail.id),
+      index,
+    }))
+    .filter(entry => !!entry.quest)
+    .reverse();
+}
 
 function renderQuestTabs() {
   const tabs = $('questTabs');
@@ -1669,10 +3223,12 @@ function renderQuestTabs() {
 }
 
 function renderQuests() {
+  ensureSystemPopupLoop();
   renderQuestTabs();
   const dailyBonus = getDailyBonus();
   const tabDef = QUEST_TAB_DEFS.find(t => t.id === questTab);
   if (tabDef && tabDef.filter) renderDailyQuests(dailyBonus, tabDef.filter);
+  else if (questTab === 'completed') renderCompletedQuests();
   else if (questTab === 'weekly') renderWeeklyQuests();
   else if (questTab === 'custom') renderCustomQuests();
   else renderChainQuests();
@@ -1683,10 +3239,15 @@ function renderQuests() {
 function renderDailyQuests(dailyBonus, filterFn) {
   const lastA = state.assessmentHistory[state.assessmentHistory.length-1] || null;
   let allQuests = getAvailableQuests(lastA);
-  if (filterFn) allQuests = allQuests.filter(filterFn);
-  currentQuests = allQuests;
+  const tabDef = QUEST_TAB_DEFS.find(t => t.id === questTab);
+  currentQuests = getVisibleDailyQuests(allQuests, tabDef);
+  const filteredAllQuests = filterFn ? allQuests.filter(filterFn) : allQuests;
+  const completedRelevant = filteredAllQuests.filter(q => getDoneInfo(q.id));
 
   const listEl = $('questList');
+  if (currentQuests.length === 0) {
+    listEl.innerHTML = `<div class="cq-empty"><div class="cq-empty-icon">✅</div><p>Nessuna quest attiva in questa tab. Completa l'assessment successivo o consulta la tab completate.</p></div>`;
+  } else {
   listEl.innerHTML = currentQuests.map(q => {
     const rank = getRank(q.diff);
     const rarity = getQuestRarity(q.diff);
@@ -1700,6 +3261,14 @@ function renderDailyQuests(dailyBonus, filterFn) {
     const rarityTag = `<span class="rarity-badge rarity-${rarity.toLowerCase()}">${RARITY_LABELS[rarity]}</span>`;
     const timedTag = q.timed ? '<span class="timed-tag">⏱ TIMED</span>' : '';
     const doneModeBadge = doneInfo?.mode ? `<span class="done-mode-badge" style="color:${DIFFICULTY_MODES[doneInfo.mode].color}">${DIFFICULTY_MODES[doneInfo.mode].icon} ${DIFFICULTY_MODES[doneInfo.mode].label}</span>` : '';
+    const gearTag = q.equipmentId ? `<span class="daily-bonus-tag">${EQUIPMENT_CATALOG[q.equipmentId]?.icon || '🎁'} GEAR</span>` : '';
+    const lootPreview = q.type === 'SPECIAL'
+      ? `<div class="quest-loot-preview">${(SPECIAL_QUEST_LOOT_TABLES[q.id] || [{ itemId: q.equipmentId, weight: 100 }]).map(entry => {
+          const lootItem = EQUIPMENT_CATALOG[entry.itemId];
+          return `<span class="quest-loot-chip">${lootItem?.icon || '✦'} ${getItemDisplayName(lootItem)} · ${entry.weight}%</span>`;
+        }).join('')}</div>`
+      : '';
+    const questHints = `<div class="quest-hint-icons">${getQuestHintIcons(q).map(hint => `<span class="quest-hint-icon ${hint.motion}">${hint.emoji}</span>`).join('')}</div>`;
 
     // XP preview for each mode (matches completeQuest formula)
     const xpPreview = !done && !locked ? `<div class="diff-mode-selector" data-qid="${q.id}">
@@ -1723,10 +3292,12 @@ function renderDailyQuests(dailyBonus, filterFn) {
         <div class="q-check">${done ? '✓' : (locked ? '🔒' : '')}</div>
         <span class="q-icon">${q.icon}</span>
         <div class="q-body">
-          <div class="q-name">${q.name} ${bonusTag} ${timedTag} ${doneModeBadge}</div>
+          <div class="q-name">${q.name} ${bonusTag} ${gearTag} ${timedTag} ${doneModeBadge}</div>
           <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
           <div class="q-desc">${q.desc}</div>
+          ${questHints}
           <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
+          ${lootPreview}
           ${xpPreview}
           <div class="q-detail" id="detail-${q.id}">
             <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
@@ -1736,9 +3307,10 @@ function renderDailyQuests(dailyBonus, filterFn) {
         <div class="q-rank rk-${rank}">${rank}</div>
       </div>`;
   }).join('');
+  }
 
-  const total = currentQuests.length;
-  const done = currentQuests.filter(q => getDoneInfo(q.id)).length;
+  const total = currentQuests.length + completedRelevant.length;
+  const done = completedRelevant.length;
   const pct = total > 0 ? Math.round((done/total)*100) : 0;
   $('qpFill').style.width = pct+'%';
   $('qpText').textContent = `${done} / ${total}`;
@@ -1770,6 +3342,55 @@ function renderDailyQuests(dailyBonus, filterFn) {
   });
 }
 
+function renderCompletedQuests() {
+  const entries = getCompletedDailyQuestEntries();
+  currentQuests = entries.map(entry => entry.quest);
+
+  const listEl = $('questList');
+  if (entries.length === 0) {
+    listEl.innerHTML = `<div class="cq-empty"><div class="cq-empty-icon">🗂</div><p>Nessuna quest completata oggi.</p></div>`;
+  } else {
+    listEl.innerHTML = entries.map(entry => {
+      const q = entry.quest;
+      const modeInfo = DIFFICULTY_MODES[entry.mode || 'medium'];
+      const earnedXp = entry.earnedXp ?? q.rewards.reduce((acc, rew) => acc + rew.xp, 0);
+      const timeLbl = q.timed && entry.timeBonus && entry.timeBonus !== 1 ? ` · ⏱ x${entry.timeBonus.toFixed(2)}` : '';
+      const gearTag = q.equipmentId ? `<span class="daily-bonus-tag">${EQUIPMENT_CATALOG[q.equipmentId]?.icon || '🎁'} GEAR</span>` : '';
+      const questHints = `<div class="quest-hint-icons">${getQuestHintIcons(q).map(hint => `<span class="quest-hint-icon ${hint.motion}">${hint.emoji}</span>`).join('')}</div>`;
+      return `
+        <div class="quest-card done rarity-border-${getQuestRarity(q.diff).toLowerCase()}" data-quest-id="${q.id}" data-cat="${q.cat}">
+          <div class="q-check">✓</div>
+          <span class="q-icon">${q.icon}</span>
+          <div class="q-body">
+            <div class="q-name">${q.name} ${gearTag} <span class="done-mode-badge" style="color:${modeInfo.color}">${modeInfo.icon} ${modeInfo.label}</span></div>
+            <div class="q-tags"><span class="q-cat-tag">${q.cat}</span><span class="timed-tag">COMPLETATA</span></div>
+            <div class="q-desc">${q.desc}</div>
+            ${questHints}
+            <div class="q-meta"><span class="q-dur">${q.dur} min${timeLbl}</span><span class="q-xp">+${earnedXp} XP</span></div>
+            <div class="q-detail" id="detail-completed-${entry.index}">
+              <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
+              <div class="q-sci">${q.science}</div>
+            </div>
+          </div>
+          <div class="q-rank rk-${getRank(q.diff)}">✓</div>
+        </div>`;
+    }).join('');
+
+    listEl.querySelectorAll('.quest-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const detail = card.querySelector('.q-detail');
+        if (detail) detail.classList.toggle('open');
+      });
+    });
+  }
+
+  const total = entries.length;
+  $('qpFill').style.width = total > 0 ? '100%' : '0%';
+  $('qpText').textContent = `${total} completate oggi`;
+  const totalXP = entries.reduce((sum, entry) => sum + (entry.earnedXp ?? entry.quest.rewards.reduce((acc, rew) => acc + rew.xp, 0)), 0);
+  $('totalRewXp').textContent = `${totalXP} XP ottenuti`;
+}
+
 function getDoneInfo(qid) {
   return (state.todayCompletedDetails || []).find(d => d.id === qid) || (state.todayCompleted.includes(qid) ? { id:qid, mode:'medium' } : null);
 }
@@ -1778,6 +3399,7 @@ function getDoneInfo(qid) {
 let activeTimedQuest = null;
 let timedQuestStart = 0;
 let timedQuestInterval = null;
+let activeMissionChecklist = [];
 
 function startQuestWithMode(qid, mode) {
   const quest = findQuestById(qid);
@@ -1785,15 +3407,10 @@ function startQuestWithMode(qid, mode) {
   if (!meetsReq(quest.req)) { showToast('Requisiti non soddisfatti','alert'); return; }
   if (getDoneInfo(qid)) { showToast('Quest già completata oggi','alert'); return; }
 
-  if (quest.timed) {
-    // Open timed quest overlay
-    activeTimedQuest = { quest, mode };
-    timedQuestStart = 0;
-    showTimedQuestOverlay(quest, mode);
-  } else {
-    // Direct completion
-    completeQuest(quest, mode, 1.0);
-  }
+  activeTimedQuest = { quest, mode };
+  activeMissionChecklist = quest.protocol.map(() => false);
+  timedQuestStart = 0;
+  showTimedQuestOverlay(quest, mode);
 }
 
 function showTimedQuestOverlay(quest, mode) {
@@ -1804,21 +3421,72 @@ function showTimedQuestOverlay(quest, mode) {
   $('tqName').textContent = quest.name;
   $('tqMode').textContent = modeInfo.label;
   $('tqMode').style.color = modeInfo.color;
+  $('tqDesc').textContent = quest.desc;
   $('tqTarget').textContent = `Obiettivo: ${targetMin} min`;
   $('tqElapsed').textContent = '00:00';
   $('tqBonusPrev').textContent = 'Avvia per iniziare';
-  $('btnTqStart').classList.remove('hidden');
-  $('btnTqStop').classList.add('hidden');
-  $('tqProtocol').innerHTML = `<ol>${quest.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>`;
+  $('tqScience').textContent = quest.science;
+  renderMissionChecklist();
+  updateMissionActionState();
   ov.classList.remove('hidden');
+}
+
+function renderMissionChecklist() {
+  const checklistEl = $('tqChecklist');
+  const quest = activeTimedQuest?.quest;
+  if (!checklistEl || !quest) return;
+
+  checklistEl.innerHTML = quest.protocol.map((step, index) => `
+    <label class="tq-check-item ${activeMissionChecklist[index] ? 'done' : ''}">
+      <input type="checkbox" data-step-index="${index}" ${activeMissionChecklist[index] ? 'checked' : ''}>
+      <span class="tq-check-copy">${step}</span>
+    </label>`).join('');
+
+  checklistEl.querySelectorAll('[data-step-index]').forEach(input => {
+    input.addEventListener('change', () => {
+      activeMissionChecklist[Number(input.dataset.stepIndex)] = input.checked;
+      renderMissionChecklist();
+      updateMissionActionState();
+    });
+  });
+}
+
+function updateMissionActionState() {
+  const quest = activeTimedQuest?.quest;
+  if (!quest) return;
+  const allChecked = activeMissionChecklist.length > 0 && activeMissionChecklist.every(Boolean);
+  const completedSteps = activeMissionChecklist.filter(Boolean).length;
+  const startBtn = $('btnTqStart');
+  const stopBtn = $('btnTqStop');
+  const timerDisplay = $('tqTimerDisplay');
+  const hint = $('tqHint');
+
+  timerDisplay.classList.toggle('hidden', !quest.timed);
+
+  if (quest.timed) {
+    startBtn.classList.toggle('hidden', !!timedQuestStart);
+    stopBtn.classList.toggle('hidden', !timedQuestStart);
+    stopBtn.disabled = !allChecked;
+    stopBtn.textContent = allChecked ? '✔ COMPLETA QUEST' : `CHECKLIST ${completedSteps}/${activeMissionChecklist.length}`;
+    hint.textContent = timedQuestStart
+      ? (allChecked ? 'Timer attivo e checklist completa. Puoi chiudere la missione.' : 'Completa tutti i passaggi della checklist prima di confermare la quest.')
+      : 'Avvia il timer e segui i passaggi. La conferma finale si sblocca dopo la checklist.';
+  } else {
+    startBtn.classList.add('hidden');
+    stopBtn.classList.remove('hidden');
+    stopBtn.disabled = !allChecked;
+    stopBtn.textContent = allChecked ? '✔ CONFERMA COMPLETAMENTO' : `CHECKLIST ${completedSteps}/${activeMissionChecklist.length}`;
+    hint.textContent = allChecked
+      ? 'Checklist completa. Conferma la missione per ottenere XP, materiali e possibili drop.'
+      : 'Apri la missione, completa i passaggi e spunta la checklist per chiuderla.';
+  }
 }
 
 function startTimedQuest() {
   timedQuestStart = Date.now();
-  $('btnTqStart').classList.add('hidden');
-  $('btnTqStop').classList.remove('hidden');
   if (timedQuestInterval) clearInterval(timedQuestInterval);
   timedQuestInterval = setInterval(updateTimedQuestDisplay, 1000);
+  updateMissionActionState();
   updateTimedQuestDisplay();
 }
 
@@ -1835,20 +3503,26 @@ function updateTimedQuestDisplay() {
 }
 
 function stopTimedQuest() {
+  if (!activeMissionChecklist.every(Boolean)) {
+    showToast('Completa prima tutti i passaggi della checklist', 'alert');
+    return;
+  }
   if (timedQuestInterval) { clearInterval(timedQuestInterval); timedQuestInterval = null; }
-  if (!activeTimedQuest || !timedQuestStart) return;
-  const elapsed = Math.floor((Date.now() - timedQuestStart) / 1000);
+  if (!activeTimedQuest) return;
+  const elapsed = timedQuestStart ? Math.floor((Date.now() - timedQuestStart) / 1000) : 0;
   const timeBonus = calcTimeBonus(activeTimedQuest.quest, elapsed);
   const { quest, mode } = activeTimedQuest;
   $('timedQuestOverlay').classList.add('hidden');
   activeTimedQuest = null;
+  activeMissionChecklist = [];
   timedQuestStart = 0;
-  completeQuest(quest, mode, timeBonus);
+  completeQuest(quest, mode, quest.timed ? timeBonus : 1.0);
 }
 
 function cancelTimedQuest() {
   if (timedQuestInterval) { clearInterval(timedQuestInterval); timedQuestInterval = null; }
   activeTimedQuest = null;
+  activeMissionChecklist = [];
   timedQuestStart = 0;
   $('timedQuestOverlay').classList.add('hidden');
 }
@@ -1994,6 +3668,7 @@ function completeQuest(quest, mode, timeBonus) {
   const dailyBonus = getDailyBonus();
   let dailyMult = 1;
   if (dailyBonus.questId === quest.id && dailyBonus.bonus === '2X_XP') dailyMult = 2;
+  let selectedDropItemId = null;
 
   let totalG = 0, anyLvl = false;
   for (const rew of quest.rewards) {
@@ -2008,7 +3683,20 @@ function completeQuest(quest, mode, timeBonus) {
   state.questsCompleted++;
   state.todayCompleted.push(quest.id);
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
-  state.todayCompletedDetails.push({ id:quest.id, mode, timeBonus });
+  state.todayCompletedDetails.push({ id:quest.id, mode, timeBonus, earnedXp: totalG, completedAt: Date.now() });
+  if (quest.type === 'SPECIAL') {
+    if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
+    if (!state.specialQuestCompleted.includes(quest.id)) state.specialQuestCompleted.push(quest.id);
+    selectedDropItemId = getQuestDropItemId(quest);
+    if (selectedDropItemId) awardEquipment(selectedDropItemId);
+  }
+
+  const questMaterial = SET_PRIMARY_MATERIAL[quest.type === 'SPECIAL' ? (EQUIPMENT_CATALOG[selectedDropItemId]?.set || 'IRON_HEART') : ({ PHYSIQUE:'IRON_HEART', COGNITIVE:'MONARCH_SYNTH', NEURAL:'MONARCH_SYNTH', SOCIAL:'SHADOWFORGED' }[quest.cat] || 'IRON_HEART')];
+  if (questMaterial) {
+    const materialAmount = quest.type === 'SPECIAL' ? 2 : mode === 'hard' ? 2 : 1;
+    awardMaterial(questMaterial, materialAmount, quest.name);
+  }
+  if (quest.type === 'SPECIAL' || mode === 'hard') awardMaterial('BOSS_CORE', 1, quest.name);
 
   // Faction rep
   addFactionRep(quest.cat, Math.round(10 * rarityMult * modeInfo.xpMult));
@@ -2060,6 +3748,467 @@ function completeQuest(quest, mode, timeBonus) {
 
   renderQuests();
   renderStatus();
+  renderCodex();
+  renderGear();
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'SYSTEM',
+    title: 'QUEST CLEAR',
+    body: 'Missione completata. Il sistema ha aggiornato XP, streak, drop e priorita del Quest Board.',
+    sound: 'reward',
+  });
+}
+
+function getTotalGearPower() {
+  return [...PRIMARY_STATS, ...SECONDARY_STATS].reduce((sum, stat) => sum + getEquipmentBonusForStat(stat.id), 0);
+}
+
+function getGearRarityClass(rarity) {
+  return `gear-rarity-${String(rarity || '').toLowerCase()}`;
+}
+
+function getQuestHintIcons(quest) {
+  const text = `${quest.desc || ''} ${(quest.protocol || []).join(' ')}`.toLowerCase();
+  const hints = [];
+  const pushHint = (emoji, motion) => {
+    if (hints.some(h => h.emoji === emoji)) return;
+    hints.push({ emoji, motion });
+  };
+
+  if (quest.timed) pushHint('⏱️', 'pulse');
+  if (quest.cat === 'PHYSIQUE') pushHint('🏃', 'float');
+  if (quest.cat === 'COGNITIVE') pushHint('📘', 'blink');
+  if (quest.cat === 'NEURAL') pushHint('🫁', 'pulse');
+  if (quest.cat === 'SOCIAL') pushHint('🗨️', 'sway');
+  if (/cold|fredd|ghiacci/.test(text)) pushHint('🧊', 'pulse');
+  if (/walk|cammin|run|corsa/.test(text)) pushHint('👣', 'float');
+  if (/write|scrivi|journal/.test(text)) pushHint('✍️', 'blink');
+  if (/speak|parla|social|chiama/.test(text)) pushHint('📡', 'sway');
+  if (/breath|respir|vagal|co2/.test(text)) pushHint('🌬️', 'pulse');
+
+  return hints.slice(0, 3);
+}
+
+function awardBossTitle(boss) {
+  if (!boss?.titleReward) return false;
+  if (!Array.isArray(state.bossTitles)) state.bossTitles = [];
+  const alreadyOwned = state.bossTitles.includes(boss.titleReward);
+  if (!alreadyOwned) state.bossTitles.push(boss.titleReward);
+  state.activeBossTitle = boss.titleReward;
+  return !alreadyOwned;
+}
+
+const CODEX_TAB_DEFS = [
+  { id:'rank', label:'RANK' },
+  { id:'stats', label:'STATS' },
+  { id:'boss', label:'BOSS' },
+  { id:'drop', label:'DROP RATE' },
+  { id:'set', label:'SET BONUS' },
+  { id:'legacy', label:'LEGACY 100' },
+];
+
+function renderCodex() {
+  const tabsEl = $('codexTabs');
+  const contentEl = $('codexContent');
+  if (!tabsEl || !contentEl) return;
+
+  const activeTab = state.codexTab || 'rank';
+  const rankInfo = getHunterRankInfo();
+  const playerClass = CLASS_DEFINITIONS.find(c => c.id === state.playerClass);
+  const allStats = [...PRIMARY_STATS, ...SECONDARY_STATS];
+  const effectiveStats = allStats
+    .map(stat => ({
+      ...stat,
+      base: getStatLv(stat.id),
+      bonus: getEquipmentBonusForStat(stat.id),
+      total: getEffectiveStatLv(stat.id),
+    }))
+    .sort((a, b) => b.total - a.total);
+  const setCounts = getEquippedSetCounts();
+  const guideCards = `
+    <div class="codex-card">
+      <div class="codex-card-title">COME LEGGERE NEURO-LEVELING</div>
+      <div class="codex-card-copy"><strong>Hunter Rank</strong> è il livello vero dell'account. <strong>Class Sync</strong> misura quanto la tua build segue la classe. Le <strong>quest</strong> alzano stat e rank. <strong>Boss</strong>, <strong>gear</strong>, <strong>set</strong> e <strong>forge</strong> moltiplicano la build.</div>
+      <div class="codex-chip-list">
+        <span class="codex-chip">1. Scan con Assessment</span>
+        <span class="codex-chip">2. Scegli la difficoltà</span>
+        <span class="codex-chip">3. Completa checklist missione</span>
+        <span class="codex-chip">4. Raccogli XP, materiali e drop</span>
+      </div>
+    </div>
+    <div class="codex-card">
+      <div class="codex-card-title">GEAR FLOW</div>
+      <div class="codex-card-copy">Le Special Quest sbloccano pezzi o varianti dello stesso slot. I materiali servono per la forge +1/+2/+3. I boss rilasciano drop unici e upgrade permanenti ai set.</div>
+    </div>`;
+
+  const codexPages = {
+    rank: `
+      ${guideCards}
+      <div class="codex-card">
+        <div class="codex-card-title">RANK PROTOCOL</div>
+        <div class="codex-card-copy">Hunter Rank è il livello globale del profilo. Parte dall'assessment iniziale e poi sale solo con quest, boss, gear e drop. Class Sync misura invece quanto la tua classe è allineata alla build attuale.</div>
+        <div class="codex-chip-list">
+          <span class="codex-chip">Hunter Rank ${rankInfo.rank}</span>
+          <span class="codex-chip">Class Sync ${getClassLevel()}</span>
+          <span class="codex-chip">Titolo ${getTitle()}</span>
+          <span class="codex-chip">Streak ${state.currentStreak}</span>
+        </div>
+      </div>
+      <div class="codex-card">
+        <div class="codex-card-title">BUILD STATUS</div>
+        <div class="codex-list">
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Classe attuale</div>
+              <div class="codex-row-copy">${playerClass ? `${playerClass.icon} ${playerClass.name} · ${playerClass.desc}` : 'Classe non assegnata.'}</div>
+            </div>
+            <div class="codex-chip">Sync ${getClassLevel()}</div>
+          </div>
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Progressione del rank</div>
+              <div class="codex-row-copy">${rankInfo.nextXp > 0 ? `${rankInfo.xpIntoRank} / ${rankInfo.nextXp} XP nel rank corrente.` : 'Rank massimo raggiunto.'}</div>
+            </div>
+            <div class="codex-chip">XP ${state.totalXP}</div>
+          </div>
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Gear power</div>
+              <div class="codex-row-copy">Include bonus item, set attivi e upgrade permanenti ottenuti dai boss.</div>
+            </div>
+            <div class="codex-chip">+${getTotalGearPower()}</div>
+          </div>
+        </div>
+      </div>
+      <div class="codex-card">
+        <div class="codex-card-title">PROFILO HUNTER</div>
+        <div class="codex-list">
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Punti forti</div>
+              <div class="codex-row-copy">${state.profileStrengths || 'Non ancora definiti.'}</div>
+            </div>
+            <div class="codex-chip">BUILD</div>
+          </div>
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Punti deboli</div>
+              <div class="codex-row-copy">${state.profileWeaknesses || 'Nessuna debolezza registrata.'}</div>
+            </div>
+            <div class="codex-chip">RISK</div>
+          </div>
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Paure da spezzare</div>
+              <div class="codex-row-copy">${state.profileFears || 'Nessuna paura registrata.'}</div>
+            </div>
+            <div class="codex-chip">BOSS</div>
+          </div>
+          <div class="codex-row">
+            <div>
+              <div class="codex-row-title">Titoli sbloccati</div>
+              <div class="codex-row-copy">${(state.bossTitles || []).length ? state.bossTitles.join(' · ') : 'Per ora usi solo i titoli di Rank.'}</div>
+            </div>
+            <div class="codex-chip">${(state.bossTitles || []).length}</div>
+          </div>
+        </div>
+      </div>`,
+    stats: `
+      <div class="codex-card">
+        <div class="codex-card-title">STAT MATRIX</div>
+        <div class="codex-card-copy">Valori effettivi già comprensivi di equipaggiamento, set bonus e forge levels.</div>
+        <div class="codex-list">
+          ${effectiveStats.map(stat => `
+            <div class="codex-row">
+              <div>
+                <div class="codex-row-title">${stat.icon} ${stat.name}</div>
+                <div class="codex-row-copy">Base ${stat.base}${stat.bonus ? ` · bonus gear/set +${stat.bonus}` : ''}</div>
+              </div>
+              <div class="codex-chip">LV ${stat.total}</div>
+            </div>`).join('')}
+        </div>
+      </div>`,
+    boss: `
+      <div class="codex-card">
+        <div class="codex-card-title">BOSS INDEX</div>
+        <div class="codex-list">
+          ${BOSS_DEFINITIONS.map(boss => {
+            const bossDrop = (BOSS_DROP_TABLES[boss.id] || [])[0];
+            const dropItem = bossDrop ? EQUIPMENT_CATALOG[bossDrop.itemId] : null;
+            const upgrade = BOSS_SET_UPGRADES[boss.id];
+            const defeated = (state.bossesDefeated || []).includes(boss.id);
+            return `
+              <div class="codex-row">
+                <div>
+                  <div class="codex-row-title">${boss.icon} ${boss.name}</div>
+                  <div class="codex-row-copy">${boss.title} · ${boss.emotionLabel}. ${defeated ? 'Boss sconfitto.' : `Req ${boss.req.map(req => `${req.stat} ${req.minLv}`).join(' · ')}`}</div>
+                  <div class="codex-chip-list">
+                    <span class="codex-chip">Titolo ${boss.titleReward}</span>
+                    ${dropItem ? `<span class="codex-chip">DROP ${dropItem.icon} ${getItemDisplayName(dropItem)}</span>` : ''}
+                    ${upgrade ? `<span class="codex-chip">SET ${EQUIPMENT_SET_BONUSES[upgrade.setId]?.name || upgrade.setId} · ${Object.entries(upgrade.bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}</span>` : ''}
+                  </div>
+                </div>
+                <div class="codex-chip">${defeated ? 'CLEAR' : 'LOCK/READY'}</div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`,
+    drop: `
+      <div class="codex-card">
+        <div class="codex-card-title">SPECIAL QUEST LOOT TABLE</div>
+        <div class="codex-list">
+          ${SPECIAL_QUESTS.map(quest => `
+            <div class="codex-row">
+              <div>
+                <div class="codex-row-title">${quest.icon} ${quest.name}</div>
+                <div class="codex-row-copy">${quest.desc}</div>
+                <div class="codex-chip-list">
+                  ${(SPECIAL_QUEST_LOOT_TABLES[quest.id] || [{ itemId: quest.equipmentId, weight: 100 }]).map(entry => {
+                    const item = EQUIPMENT_CATALOG[entry.itemId];
+                    return `<span class="codex-chip">${item?.icon || '✦'} ${getItemDisplayName(item)} · ${entry.weight}%</span>`;
+                  }).join('')}
+                </div>
+              </div>
+              <div class="codex-chip">${quest.cat}</div>
+            </div>`).join('')}
+        </div>
+      </div>`,
+    set: `
+      <div class="codex-card">
+        <div class="codex-card-title">SET BONUS MATRIX</div>
+        <div class="codex-list">
+          ${Object.entries(EQUIPMENT_SET_BONUSES).map(([setId, setDef]) => {
+            const upgrades = state.setUpgrades?.[setId] || {};
+            const material = MATERIAL_CATALOG[SET_PRIMARY_MATERIAL[setId]];
+            return `
+              <div class="codex-row">
+                <div>
+                  <div class="codex-row-title">${setDef.icon} ${setDef.name}</div>
+                  <div class="codex-row-copy">${Object.entries(setDef.thresholds).map(([threshold, stats]) => `${threshold}p: ${Object.entries(stats).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}`).join(' | ')}</div>
+                  <div class="codex-chip-list">
+                    <span class="codex-chip">Equip ${setCounts[setId] || 0}/4</span>
+                    <span class="codex-chip">Forge ${material?.icon || '✦'} ${material?.name || 'Materiale'}</span>
+                    ${Object.keys(upgrades).length ? `<span class="codex-chip">Boss upgrade ${Object.entries(upgrades).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}</span>` : ''}
+                  </div>
+                </div>
+                <div class="codex-chip">${(setCounts[setId] || 0) >= 4 ? 'FULL SET' : 'PARTIAL'}</div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`,
+    legacy: (() => {
+      const completed = LEGACY_100_LIST.filter((_, index) => !!state.bucketListChecks?.[index]).length;
+      return `
+        <div class="codex-card">
+          <div class="codex-card-title">LEGACY: 100 COSE DA FARE PRIMA DI MORIRE</div>
+          <div class="codex-card-copy">Spunta una voce alla volta. Questa pagina diventa il tuo endgame fuori dalle quest giornaliere.</div>
+          <div class="legacy-progress">
+            <span>Progressione Legacy</span>
+            <strong>${completed} / ${LEGACY_100_LIST.length}</strong>
+          </div>
+          <div class="legacy-list">
+            ${LEGACY_100_LIST.map((item, index) => `
+              <label class="legacy-item ${state.bucketListChecks?.[index] ? 'done' : ''}">
+                <input type="checkbox" data-legacy-index="${index}" ${state.bucketListChecks?.[index] ? 'checked' : ''}>
+                <span class="legacy-item-label">${index + 1}. ${item}</span>
+              </label>
+            `).join('')}
+          </div>
+        </div>`;
+    })(),
+  };
+
+  tabsEl.innerHTML = CODEX_TAB_DEFS.map(tab => `<button class="codex-tab ${tab.id === activeTab ? 'active' : ''}" data-codex-tab="${tab.id}">${tab.label}</button>`).join('');
+  contentEl.innerHTML = codexPages[activeTab] || codexPages.rank;
+
+  tabsEl.querySelectorAll('[data-codex-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.codexTab = btn.dataset.codexTab;
+      saveState();
+      renderCodex();
+    });
+  });
+
+  contentEl.querySelectorAll('[data-legacy-index]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (!state.bucketListChecks || typeof state.bucketListChecks !== 'object') state.bucketListChecks = {};
+      state.bucketListChecks[input.dataset.legacyIndex] = input.checked;
+      saveState();
+      renderCodex();
+    });
+  });
+}
+
+function renderGear() {
+  const powerEl = $('gearPowerValue');
+  const descEl = $('gearPowerDesc');
+  const blueprintEl = $('gearBlueprintList');
+  const setListEl = $('gearSetList');
+  const materialsEl = $('gearMaterialsList');
+  const slotsEl = $('gearSlotsGrid');
+  const inventoryEl = $('gearInventoryList');
+  const consumablesEl = $('gearConsumablesList');
+  if (!powerEl || !descEl || !blueprintEl || !setListEl || !materialsEl || !slotsEl || !inventoryEl || !consumablesEl) return;
+
+  const totalPower = getTotalGearPower();
+  const equippedCount = Object.values(state.equippedGear || {}).filter(Boolean).length;
+  powerEl.textContent = `+${totalPower}`;
+  descEl.textContent = totalPower
+    ? `${equippedCount}/${EQUIPMENT_SLOTS.length} slot attivi. Bonus item e set gia applicati ai requisiti e ai livelli mostrati.`
+    : 'Completa le quest speciali per riempire il loadout e sbloccare bonus progressivi di set.';
+
+  blueprintEl.innerHTML = EQUIPMENT_SLOTS.map(slot => {
+    const equippedItem = getEquippedItem(slot);
+    const sourceQuests = getSlotBlueprintQuests(slot);
+    const sourceText = sourceQuests.length
+      ? sourceQuests.map(quest => `${quest.icon} ${quest.name}`).join(' · ')
+      : 'Slot alimentato da boss drop o varianti avanzate.';
+    return `
+      <div class="gear-blueprint-card ${equippedItem ? 'active' : ''}">
+        <div class="gear-blueprint-slot">${EQUIPMENT_SLOT_LABELS[slot]}</div>
+        <div class="gear-blueprint-state">${equippedItem ? `${equippedItem.icon} ${getItemDisplayName(equippedItem)}` : 'Slot vuoto'}</div>
+        <div class="gear-blueprint-source">${sourceText}</div>
+      </div>`;
+  }).join('');
+
+  const setCounts = getEquippedSetCounts();
+  setListEl.innerHTML = Object.entries(EQUIPMENT_SET_BONUSES).map(([setId, setDef]) => {
+    const count = setCounts[setId] || 0;
+    const upgrades = state.setUpgrades?.[setId] || {};
+    const bonuses = Object.entries(setDef.thresholds).map(([threshold, stats]) => {
+      const active = count >= Number(threshold);
+      return `<div class="gear-set-threshold ${active ? 'active' : ''}">${active ? '✓' : '○'} ${threshold}p · ${Object.entries(stats).map(([stat, val]) => `+${val} ${stat}`).join(' · ')}</div>`;
+    }).join('');
+    const upgradeLine = Object.keys(upgrades).length
+      ? `<div class="gear-set-threshold active">⬆ boss upgrade · ${Object.entries(upgrades).map(([stat, val]) => `+${val} ${stat}`).join(' · ')}</div>`
+      : '';
+    return `
+      <div class="gear-set-card ${count ? 'active' : ''}">
+        <div class="gear-set-head">
+          <div class="gear-set-name">${setDef.icon} ${setDef.name}</div>
+          <div class="gear-set-count">${count} / 4</div>
+        </div>
+        <div class="gear-set-bonuses">${bonuses}${upgradeLine}</div>
+      </div>`;
+  }).join('');
+
+  materialsEl.innerHTML = Object.values(MATERIAL_CATALOG).map(material => `
+    <div class="gear-material-card">
+      <div class="gear-material-name">${material.icon} ${material.name}</div>
+      <div class="gear-material-count">${state.materials?.[material.id] || 0}</div>
+      <div class="gear-material-desc">${material.desc}</div>
+    </div>`).join('');
+
+  slotsEl.innerHTML = EQUIPMENT_SLOTS.map(slot => {
+    const item = getEquippedItem(slot);
+    const itemBonuses = getItemBonuses(item);
+    const upgradeLevel = item ? getItemUpgradeLevel(item.id) : 0;
+    const bonuses = item
+      ? Object.entries(itemBonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('')
+      : '';
+    return `
+      <div class="gear-slot-card ${item ? 'equipped' : 'empty'}" data-slot="${slot}">
+        <div class="gear-slot-label">${EQUIPMENT_SLOT_LABELS[slot]}</div>
+        ${item ? `
+          <div class="gear-item-head">
+            <div class="gear-item-icon">${item.icon}</div>
+            <div>
+              <div class="gear-item-name">${getItemDisplayName(item)}</div>
+              <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity}</div>
+            </div>
+          </div>
+          <div class="gear-item-desc">${item.desc}</div>
+          <div class="gear-item-bonuses">${bonuses}</div>
+          <div class="gear-slot-meta">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}${upgradeLevel ? ` · FORGE +${upgradeLevel}` : ''}</div>
+          <button class="btn ghost" data-unequip-slot="${slot}">Rimuovi</button>` : `
+            <div class="gear-slot-empty">Slot vuoto. ${getSlotBlueprintQuests(slot).length ? `Farmalo con ${getSlotBlueprintQuests(slot).map(quest => quest.name).join(' / ')}.` : 'Continua con special quest e boss avanzati per sbloccarlo.'}</div>`}
+      </div>`;
+  }).join('');
+
+  const owned = getOwnedEquipmentItems();
+  const arsenalItems = owned.filter(item => !isFlaskItem(item.id));
+  inventoryEl.innerHTML = arsenalItems.length ? arsenalItems.map(item => {
+    const equipped = state.equippedGear?.[item.slot] === item.id;
+    const bonuses = Object.entries(getItemBonuses(item)).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('');
+    const upgrade = getUpgradeCost(item);
+    const canUpgrade = upgrade && hasUpgradeMaterials(upgrade.costs);
+    return `
+      <div class="gear-card ${equipped ? 'equipped' : ''}">
+        <div class="gear-card-top">
+          <div class="gear-item-head">
+            <div class="gear-item-icon">${item.icon}</div>
+            <div>
+              <div class="gear-item-name">${getItemDisplayName(item)}</div>
+              <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
+            </div>
+          </div>
+          <div class="gear-item-bonuses">${bonuses}</div>
+        </div>
+        <div class="gear-item-desc">${item.desc}</div>
+        <div class="gear-card-slot">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}</div>
+        <div class="gear-upgrade-row">
+          <div class="gear-upgrade-meta">
+            <div class="gear-upgrade-label">FORGE ${getItemUpgradeLevel(item.id) >= UPGRADE_MAX_LEVEL ? 'MAX' : `NEXT +${upgrade?.nextLevel || UPGRADE_MAX_LEVEL}`}</div>
+            <div class="gear-upgrade-cost">${upgrade ? formatMaterialCost(upgrade.costs) : 'Potenziamento massimo raggiunto'}</div>
+          </div>
+          <button class="btn ${canUpgrade ? '' : 'ghost'}" data-upgrade-item="${item.id}" ${upgrade ? '' : 'disabled'}>${upgrade ? 'Forge' : 'MAX'}</button>
+        </div>
+        <div class="gear-card-actions">
+          <button class="btn ${equipped ? 'ghost' : ''}" data-equip-item="${item.id}">${equipped ? 'Equipaggiato' : 'Equipaggia'}</button>
+        </div>
+      </div>`;
+  }).join('') : '<div class="gear-empty-state">Nessun equip ottenuto. Le missioni speciali iniziano a comparire quando alzi le stat richieste.</div>';
+
+  const flaskItems = owned.filter(item => isFlaskItem(item.id));
+  consumablesEl.innerHTML = flaskItems.length ? flaskItems.map(item => {
+    const effect = FLASK_EFFECTS[item.id];
+    const cooldownRemaining = getFlaskCooldownRemaining(item.id);
+    const cooldownPct = effect.cooldownMs > 0 ? Math.max(0, Math.min(100, 100 - (cooldownRemaining / effect.cooldownMs) * 100)) : 100;
+    const ready = cooldownRemaining <= 0;
+    const upgrade = getUpgradeCost(item);
+    const canUpgrade = upgrade && hasUpgradeMaterials(upgrade.costs);
+    return `
+      <div class="gear-consumable-card ${ready ? 'ready' : 'cooldown'}">
+        <div class="gear-consumable-top">
+          <div class="gear-item-head">
+            <div class="gear-item-icon">${item.icon}</div>
+            <div>
+              <div class="gear-item-name">${getItemDisplayName(item)}</div>
+              <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
+            </div>
+          </div>
+          <button class="btn ${ready ? '' : 'ghost'}" data-use-flask="${item.id}" ${ready ? '' : 'disabled'}>${ready ? 'Usa ora' : 'Cooldown'}</button>
+        </div>
+        <div class="gear-item-desc">${item.desc}</div>
+        <div class="gear-item-bonuses">${Object.entries(getItemBonuses(item)).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('')}</div>
+        <div class="gear-consumable-track"><span style="width:${cooldownPct}%"></span></div>
+        <div class="gear-consumable-meta">${effect.icon} ${effect.name} · ${ready ? 'READY' : `pronto tra ${formatTimeLeft(cooldownRemaining)}`}</div>
+        <div class="gear-upgrade-row">
+          <div class="gear-upgrade-meta">
+            <div class="gear-upgrade-label">FORGE ${getItemUpgradeLevel(item.id) >= UPGRADE_MAX_LEVEL ? 'MAX' : `NEXT +${upgrade?.nextLevel || UPGRADE_MAX_LEVEL}`}</div>
+            <div class="gear-upgrade-cost">${upgrade ? formatMaterialCost(upgrade.costs) : 'Potenziamento massimo raggiunto'}</div>
+          </div>
+          <button class="btn ${canUpgrade ? '' : 'ghost'}" data-upgrade-item="${item.id}" ${upgrade ? '' : 'disabled'}>${upgrade ? 'Forge' : 'MAX'}</button>
+        </div>
+      </div>`;
+  }).join('') : '<div class="gear-empty-state">Nessun flask trovato. Alcune special quest e alcuni boss possono sbloccarli.</div>';
+
+  slotsEl.querySelectorAll('[data-unequip-slot]').forEach(btn => btn.addEventListener('click', () => unequipItem(btn.dataset.unequipSlot)));
+  inventoryEl.querySelectorAll('[data-equip-item]').forEach(btn => btn.addEventListener('click', () => equipItem(btn.dataset.equipItem)));
+  consumablesEl.querySelectorAll('[data-use-flask]').forEach(btn => btn.addEventListener('click', () => useFlask(btn.dataset.useFlask)));
+  [...inventoryEl.querySelectorAll('[data-upgrade-item]'), ...consumablesEl.querySelectorAll('[data-upgrade-item]')].forEach(btn => btn.addEventListener('click', () => upgradeEquipmentItem(btn.dataset.upgradeItem)));
+
+  if (_gearCooldownInterval) clearInterval(_gearCooldownInterval);
+  if (currentScreen === 'gear' && flaskItems.some(item => getFlaskCooldownRemaining(item.id) > 0)) {
+    _gearCooldownInterval = setInterval(() => {
+      if (currentScreen !== 'gear') {
+        clearInterval(_gearCooldownInterval);
+        _gearCooldownInterval = null;
+        return;
+      }
+      renderGear();
+    }, 1000);
+  }
 }
 
 function completeWeeklyQuest(wq) {
@@ -2103,10 +4252,12 @@ function renderBossGrid() {
     else if (locked) stHtml = '<span class="bc-status st-lock">🔒 LOCKED</span>';
     else stHtml = '<span class="bc-status st-ready">⚔ ENGAGE</span>';
     return `
-      <div class="boss-card ${cls}" data-boss-id="${b.id}">
+      <div class="boss-card ${cls}" data-boss-id="${b.id}" data-theme="${b.themeClass || ''}">
         <div class="bc-icon">${b.icon}</div>
         <div class="bc-name">${b.name}</div>
         <div class="bc-lv">LV. ${b.level}</div>
+        <div class="bc-emotion">${b.emotionLabel || 'EMOTIONAL SIGNATURE'}</div>
+        <div class="bc-quote">“${b.quote || b.desc}”</div>
         ${stHtml}
       </div>`;
   }).join('');
@@ -2132,9 +4283,14 @@ function startBossFight(boss) {
   activeBossStep = 0;
   $('bossListView').classList.remove('active');
   $('bossFightView').classList.add('active');
+  $('bossFightView').dataset.bossTheme = boss.themeClass || '';
+  $('bossFightSigil').textContent = boss.icon || '💀';
   const n = $('bossFightName');
   n.textContent = boss.name;
   n.dataset.text = boss.name;
+  $('bossFightEmotion').textContent = boss.emotionLabel || 'EMOTIONAL SIGNATURE';
+  $('bossFightLore').textContent = boss.desc;
+  $('bossFightQuote').textContent = `“${boss.quote || ''}”`;
   updateBossHP();
   loadBossStep();
   triggerGlitch();
@@ -2204,6 +4360,8 @@ $('btnExec').addEventListener('click', () => {
 $('btnRetreat').addEventListener('click', () => {
   if (bossTimer) { clearInterval(bossTimer); bossTimer = null; }
   activeBoss = null;
+  $('bossFightView').dataset.bossTheme = '';
+  $('bossFightSigil').textContent = '💀';
   $('bossFightView').classList.remove('active');
   $('bossListView').classList.add('active');
   renderBossGrid();
@@ -2222,6 +4380,13 @@ function defeatBoss() {
   if (!state.bossesDefeated.includes(boss.id)) {
     state.bossesDefeated.push(boss.id);
   }
+  const unlockedNewTitle = awardBossTitle(boss);
+
+  const bossDrop = rollLootTable(BOSS_DROP_TABLES[boss.id] || []);
+  if (bossDrop) awardEquipment(bossDrop);
+  const setUpgrade = BOSS_SET_UPGRADES[boss.id];
+  if (setUpgrade) grantSetUpgrade(setUpgrade.setId, setUpgrade.bonuses, boss.name);
+  awardMaterial('BOSS_CORE', 2, boss.name);
   saveState();
 
   // Show rewards
@@ -2230,11 +4395,16 @@ function defeatBoss() {
     const eff = Math.floor(r.xp * 1.5 * (1+Math.min(state.currentStreak*0.05, 0.5)));
     return `${s?.icon||''} ${s?.name||r.stat}: +${eff} XP`;
   }).join('<br>');
-  $('defDetail').innerHTML = `${boss.icon} ${boss.name} SCONFITTO!<br><br>${rewLines}<br><br><strong>TOTALE: +${totalXP} XP</strong>`;
+  const bossDropLine = bossDrop ? `<br><br><strong>DROP:</strong> ${EQUIPMENT_CATALOG[bossDrop]?.icon || '✦'} ${EQUIPMENT_CATALOG[bossDrop]?.name || bossDrop}` : '';
+  const setUpgradeLine = setUpgrade ? `<br><strong>UPGRADE SET:</strong> ${EQUIPMENT_SET_BONUSES[setUpgrade.setId]?.name || setUpgrade.setId} · ${Object.entries(setUpgrade.bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}` : '';
+  const titleLine = boss.titleReward ? `<br><strong>TITOLO:</strong> ${boss.titleReward}${unlockedNewTitle ? ' · sbloccato e attivo' : ' · attivato'}` : '';
+  const quoteLine = boss.quote ? `<br><br><em>“${boss.quote}”</em>` : '';
+  $('defDetail').innerHTML = `${boss.icon} ${boss.name} SCONFITTO!<br><br>${rewLines}<br><br><strong>TOTALE: +${totalXP} XP</strong>${bossDropLine}${setUpgradeLine}${titleLine}${quoteLine}`;
   $('bossDefeatOverlay').classList.remove('hidden');
   triggerGlitch();
   showToast(`☠ ${boss.name} SCONFITTO!`, 'levelup');
   showToast(`+${totalXP} XP`, 'xp');
+  if (boss.titleReward) showToast(`👑 Titolo attivo: ${boss.titleReward}`, 'success');
   if (anyLvl) { showToast('LEVEL UP!','levelup'); showLevelUpOverlay(); }
 
   // Update status and check achievements
@@ -2245,6 +4415,8 @@ function defeatBoss() {
 
 $('btnDismissDef').addEventListener('click', () => {
   $('bossDefeatOverlay').classList.add('hidden');
+  $('bossFightView').dataset.bossTheme = '';
+  $('bossFightSigil').textContent = '💀';
   $('bossFightView').classList.remove('active');
   $('bossListView').classList.add('active');
   renderBossGrid();
@@ -2407,6 +4579,7 @@ function renderCustomQuests() {
     const timedTag = q.timed ? '<span class="timed-tag">⏱ TIMED</span>' : '';
     const customTag = '<span class="custom-tag">✦ CUSTOM</span>';
     const doneModeBadge = doneInfo?.mode ? `<span class="done-mode-badge" style="color:${DIFFICULTY_MODES[doneInfo.mode].color}">${DIFFICULTY_MODES[doneInfo.mode].icon} ${DIFFICULTY_MODES[doneInfo.mode].label}</span>` : '';
+    const questHints = `<div class="quest-hint-icons">${getQuestHintIcons(q).map(hint => `<span class="quest-hint-icon ${hint.motion}">${hint.emoji}</span>`).join('')}</div>`;
 
     const xpPreview = !done ? `<div class="diff-mode-selector" data-qid="${q.id}">
       ${Object.entries(DIFFICULTY_MODES).map(([k,m]) => {
@@ -2432,6 +4605,7 @@ function renderCustomQuests() {
           <div class="q-name">${q.name} ${customTag} ${timedTag} ${doneModeBadge}</div>
           <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
           <div class="q-desc">${q.desc || ''}</div>
+          ${questHints}
           <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
           ${xpPreview}
           <div class="q-detail" id="detail-${q.id}">
@@ -2505,6 +4679,51 @@ function initCustomQuestModal() {
   });
 }
 
+function updateAvatarPreview(previewId, emoji, color) {
+  const preview = $(previewId);
+  if (!preview) return;
+  preview.textContent = emoji;
+  preview.style.background = `linear-gradient(135deg, ${color}, #0a1020)`;
+  preview.style.boxShadow = `0 0 24px ${color}55`;
+}
+
+function renderAvatarPicker({ emojiContainerId, colorContainerId, previewId, persist = false }) {
+  const emojiContainer = $(emojiContainerId);
+  const colorContainer = $(colorContainerId);
+  if (!emojiContainer || !colorContainer) return;
+
+  const avatar = getAvatarConfig();
+
+  emojiContainer.innerHTML = AVATAR_EMOJI_OPTIONS.map(emoji => `
+    <button class="avatar-choice ${avatar.emoji === emoji ? 'selected' : ''}" type="button" data-avatar-emoji="${emoji}">${emoji}</button>
+  `).join('');
+  colorContainer.innerHTML = AVATAR_COLOR_OPTIONS.map(color => `
+    <button class="avatar-color-choice ${avatar.color === color ? 'selected' : ''}" type="button" data-avatar-color="${color}" style="--avatar-color:${color}"></button>
+  `).join('');
+
+  updateAvatarPreview(previewId, avatar.emoji, avatar.color);
+
+  emojiContainer.querySelectorAll('[data-avatar-emoji]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.avatarEmoji = btn.dataset.avatarEmoji;
+      renderAvatarPicker({ emojiContainerId, colorContainerId, previewId, persist });
+      renderUserAvatar(currentUser?.user_metadata || {});
+      if (persist) saveState();
+    });
+  });
+
+  colorContainer.querySelectorAll('[data-avatar-color]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.avatarColor = btn.dataset.avatarColor;
+      renderAvatarPicker({ emojiContainerId, colorContainerId, previewId, persist });
+      renderUserAvatar(currentUser?.user_metadata || {});
+      if (persist) saveState();
+    });
+  });
+}
+
+let aiConfigAvatarDraft = null;
+
 // ========================
 // COMPANION CHAT
 // ========================
@@ -2523,19 +4742,95 @@ function initCompanion() {
     const model = $('aiModelSelect').value.trim();
     setAiApiKey(key);
     if (model) setAiModel(model);
+    saveState();
+    renderUserAvatar(currentUser?.user_metadata || {});
+    aiConfigAvatarDraft = null;
     $('aiConfigModal').classList.add('hidden');
     showToast(key ? 'API Key salvata!' : 'API Key rimossa', 'success');
   });
   const cancelCfg = $('btnCancelAiConfig');
   if (cancelCfg) cancelCfg.addEventListener('click', () => {
+    if (aiConfigAvatarDraft) {
+      state.avatarEmoji = aiConfigAvatarDraft.emoji;
+      state.avatarColor = aiConfigAvatarDraft.color;
+      renderUserAvatar(currentUser?.user_metadata || {});
+    }
     $('aiConfigModal').classList.add('hidden');
   });
+  const openResetBtn = $('btnOpenResetAccount');
+  if (openResetBtn) openResetBtn.addEventListener('click', openResetAccountModal);
+  const resetInput = $('resetAccountConfirmInput');
+  if (resetInput) resetInput.addEventListener('input', syncResetAccountConfirmation);
+  const cancelResetBtn = $('btnCancelResetAccount');
+  if (cancelResetBtn) cancelResetBtn.addEventListener('click', closeResetAccountModal);
+  const confirmResetBtn = $('btnConfirmResetAccount');
+  if (confirmResetBtn) confirmResetBtn.addEventListener('click', resetAccountProgress);
 }
 
 function openAiConfig() {
   $('aiApiKey').value = getAiApiKey();
   $('aiModelSelect').value = getAiModel();
+  aiConfigAvatarDraft = { ...getAvatarConfig() };
+  renderAvatarPicker({
+    emojiContainerId: 'avatarEmojiChoices',
+    colorContainerId: 'avatarColorChoices',
+    previewId: 'profileAvatarPreview',
+  });
   $('aiConfigModal').classList.remove('hidden');
+}
+
+function getResetConfirmationText() {
+  return currentUser?.email || 'RESETTA ACCOUNT';
+}
+
+function syncResetAccountConfirmation() {
+  const input = $('resetAccountConfirmInput');
+  const confirmBtn = $('btnConfirmResetAccount');
+  if (!input || !confirmBtn) return;
+  confirmBtn.disabled = input.value.trim() !== getResetConfirmationText();
+}
+
+function openResetAccountModal() {
+  $('resetAccountExpected').textContent = getResetConfirmationText();
+  $('resetAccountConfirmInput').value = '';
+  syncResetAccountConfirmation();
+  $('resetAccountModal').classList.remove('hidden');
+}
+
+function closeResetAccountModal() {
+  $('resetAccountModal').classList.add('hidden');
+  $('resetAccountConfirmInput').value = '';
+  syncResetAccountConfirmation();
+}
+
+async function resetAccountProgress() {
+  const confirmText = getResetConfirmationText();
+  if ($('resetAccountConfirmInput').value.trim() !== confirmText) return;
+
+  clearTimeout(_saveTimeout);
+  state = createFreshState();
+  clearStoredState(currentUser?.id);
+  writeStoredState(state, currentUser?.id);
+
+  if (currentUser) {
+    const { error } = await supabaseClient
+      .from('players')
+      .upsert({ id: currentUser.id, state: state });
+    if (error) {
+      console.warn('Supabase reset error:', error);
+      showToast('Reset locale completato, ma il cloud non ha confermato il reset.', 'warning');
+    }
+  }
+
+  closeResetAccountModal();
+  $('aiConfigModal').classList.add('hidden');
+  _initDone = false;
+  init();
+  $('loginScreen').classList.add('hidden');
+  $('onboarding').classList.remove('hidden');
+  $('mainApp').classList.add('hidden');
+  goOnbStep(0);
+  showToast('Account resettato. Assessment iniziale riattivato.', 'success');
 }
 
 async function sendChat() {
@@ -2614,6 +4909,16 @@ function initAssessment() {
     renderAssessResult(input, ansState, debuffs);
     triggerGlitch();
     showToast('Biomarcatori analizzati','success');
+    showSystemPopup({
+      tone: isForcedRest() ? 'warning' : 'info',
+      badge: isForcedRest() ? 'WARNING' : 'GUIDE',
+      title: isForcedRest() ? 'FORCED REST DAY' : 'SCAN COMPLETATO',
+      body: isForcedRest()
+        ? 'Biomarcatori in zona rossa. Il sistema impone recovery, downshift vagale e niente raid ad alto stress.'
+        : `Stato ${ansState}. Quest Board, advice engine e danger rating sono stati ricalibrati.`,
+      urgent: isForcedRest(),
+      sound: isForcedRest() ? 'urgent' : 'soft',
+    });
   });
 
   $('btnReassess').addEventListener('click', () => {
@@ -2661,7 +4966,7 @@ function renderAssessResult(input, ans, debuffs) {
 
 function showLevelUpOverlay() {
   const o = $('levelUpOverlay');
-  $('lvlDetail').innerHTML = `${getTitle()}<br>Livello Totale: ${getTotalLevel()}`;
+  $('lvlDetail').innerHTML = `${getTitle()}<br>Hunter Rank: ${getTotalLevel()}`;
   o.classList.remove('hidden');
 }
 
@@ -2686,10 +4991,35 @@ function init() {
   if (state.criticalHits == null) state.criticalHits = 0;
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
   if (!state.customQuests)     state.customQuests = [];
+  if (state.onboardingRank == null) state.onboardingRank = 1;
+  if (!state.ownedEquipment)   state.ownedEquipment = [];
+  if (!state.equippedGear)     state.equippedGear = createEmptyGearSlots();
+  state.ownedEquipment = [...new Set((state.ownedEquipment || []).map(itemId => LEGACY_EQUIPMENT_ID_MAP[itemId] || itemId))].filter(itemId => !!EQUIPMENT_CATALOG[itemId]);
+  state.specialQuestCompleted = [...new Set((state.specialQuestCompleted || []).map(questId => LEGACY_SPECIAL_QUEST_MAP[questId] || questId))];
+  state.equippedGear = Object.entries(state.equippedGear || {}).reduce((acc, [slot, itemId]) => {
+    const mappedSlot = LEGACY_SLOT_MAP[slot] || slot;
+    const mappedItem = LEGACY_EQUIPMENT_ID_MAP[itemId] || itemId;
+    if (createEmptyGearSlots()[mappedSlot] !== undefined && mappedItem && EQUIPMENT_CATALOG[mappedItem]) {
+      acc[mappedSlot] = mappedItem;
+    }
+    return acc;
+  }, createEmptyGearSlots());
+  state.equippedGear = { ...createEmptyGearSlots(), ...state.equippedGear };
+  if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
+  if (!state.setUpgrades) state.setUpgrades = {};
+  if (!state.flaskCooldowns) state.flaskCooldowns = {};
+  if (!state.materials) state.materials = {};
+  if (!state.equipmentUpgrades) state.equipmentUpgrades = {};
+  if (!state.codexTab) state.codexTab = 'rank';
+  if (!state.bucketListChecks) state.bucketListChecks = {};
+  if (!state.bossTitles) state.bossTitles = [];
+  if (!state.avatarEmoji) state.avatarEmoji = AVATAR_EMOJI_OPTIONS[0];
+  if (!state.avatarColor) state.avatarColor = AVATAR_COLOR_OPTIONS[0];
 
   initStats();
   resetWeeklyIfNeeded();
   cleanExpiredBuffs();
+  renderUserAvatar(currentUser?.user_metadata || {});
   initOnboarding();
   initCompanion();
   initCustomQuestModal();
@@ -2697,6 +5027,8 @@ function init() {
   initTimedQuestOverlay();
   if (state.onboardingDone) {
     renderStatus();
+    renderCodex();
+    renderGear();
     checkAchievements();
   }
   } catch (e) {
@@ -2705,6 +5037,9 @@ function init() {
     if (state.onboardingDone) {
       $('onboarding').classList.add('hidden');
       $('mainApp').classList.remove('hidden');
+    } else {
+      $('onboarding').classList.remove('hidden');
+      $('mainApp').classList.add('hidden');
     }
   }
 }
