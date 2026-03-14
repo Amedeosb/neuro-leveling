@@ -1469,6 +1469,17 @@ function getQuestDropItemId(quest) {
   return rollLootTable(SPECIAL_QUEST_LOOT_TABLES[quest.id]) || quest.equipmentId || null;
 }
 
+function getQuestLootItems(quest) {
+  const itemIds = (SPECIAL_QUEST_LOOT_TABLES[quest.id] || [{ itemId: quest.equipmentId, weight: 100 }])
+    .map(entry => entry.itemId)
+    .filter(Boolean);
+  return [...new Set(itemIds)].map(itemId => EQUIPMENT_CATALOG[itemId]).filter(Boolean);
+}
+
+function getSlotBlueprintQuests(slot) {
+  return SPECIAL_QUESTS.filter(quest => getQuestLootItems(quest).some(item => item.slot === slot));
+}
+
 function grantSetUpgrade(setId, bonuses, sourceLabel='Boss Reward') {
   if (!setId || !bonuses) return;
   if (!state.setUpgrades) state.setUpgrades = {};
@@ -1647,6 +1658,7 @@ function awardEquipment(itemId) {
     body: `${item.name} agganciato al loadout. Bonus attivi: ${Object.entries(item.bonuses).map(([stat,val]) => `+${val} ${stat}`).join(' · ')}. Controlla l'Armory per slot, set e stat aggiunte.`,
     sound: 'reward',
   });
+  if (currentScreen === 'gear') renderGear();
 }
 
 // ========================
@@ -2861,6 +2873,7 @@ function getDoneInfo(qid) {
 let activeTimedQuest = null;
 let timedQuestStart = 0;
 let timedQuestInterval = null;
+let activeMissionChecklist = [];
 
 function startQuestWithMode(qid, mode) {
   const quest = findQuestById(qid);
@@ -2868,15 +2881,10 @@ function startQuestWithMode(qid, mode) {
   if (!meetsReq(quest.req)) { showToast('Requisiti non soddisfatti','alert'); return; }
   if (getDoneInfo(qid)) { showToast('Quest già completata oggi','alert'); return; }
 
-  if (quest.timed) {
-    // Open timed quest overlay
-    activeTimedQuest = { quest, mode };
-    timedQuestStart = 0;
-    showTimedQuestOverlay(quest, mode);
-  } else {
-    // Direct completion
-    completeQuest(quest, mode, 1.0);
-  }
+  activeTimedQuest = { quest, mode };
+  activeMissionChecklist = quest.protocol.map(() => false);
+  timedQuestStart = 0;
+  showTimedQuestOverlay(quest, mode);
 }
 
 function showTimedQuestOverlay(quest, mode) {
@@ -2887,21 +2895,72 @@ function showTimedQuestOverlay(quest, mode) {
   $('tqName').textContent = quest.name;
   $('tqMode').textContent = modeInfo.label;
   $('tqMode').style.color = modeInfo.color;
+  $('tqDesc').textContent = quest.desc;
   $('tqTarget').textContent = `Obiettivo: ${targetMin} min`;
   $('tqElapsed').textContent = '00:00';
   $('tqBonusPrev').textContent = 'Avvia per iniziare';
-  $('btnTqStart').classList.remove('hidden');
-  $('btnTqStop').classList.add('hidden');
-  $('tqProtocol').innerHTML = `<ol>${quest.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>`;
+  $('tqScience').textContent = quest.science;
+  renderMissionChecklist();
+  updateMissionActionState();
   ov.classList.remove('hidden');
+}
+
+function renderMissionChecklist() {
+  const checklistEl = $('tqChecklist');
+  const quest = activeTimedQuest?.quest;
+  if (!checklistEl || !quest) return;
+
+  checklistEl.innerHTML = quest.protocol.map((step, index) => `
+    <label class="tq-check-item ${activeMissionChecklist[index] ? 'done' : ''}">
+      <input type="checkbox" data-step-index="${index}" ${activeMissionChecklist[index] ? 'checked' : ''}>
+      <span class="tq-check-copy">${step}</span>
+    </label>`).join('');
+
+  checklistEl.querySelectorAll('[data-step-index]').forEach(input => {
+    input.addEventListener('change', () => {
+      activeMissionChecklist[Number(input.dataset.stepIndex)] = input.checked;
+      renderMissionChecklist();
+      updateMissionActionState();
+    });
+  });
+}
+
+function updateMissionActionState() {
+  const quest = activeTimedQuest?.quest;
+  if (!quest) return;
+  const allChecked = activeMissionChecklist.length > 0 && activeMissionChecklist.every(Boolean);
+  const completedSteps = activeMissionChecklist.filter(Boolean).length;
+  const startBtn = $('btnTqStart');
+  const stopBtn = $('btnTqStop');
+  const timerDisplay = $('tqTimerDisplay');
+  const hint = $('tqHint');
+
+  timerDisplay.classList.toggle('hidden', !quest.timed);
+
+  if (quest.timed) {
+    startBtn.classList.toggle('hidden', !!timedQuestStart);
+    stopBtn.classList.toggle('hidden', !timedQuestStart);
+    stopBtn.disabled = !allChecked;
+    stopBtn.textContent = allChecked ? '✔ COMPLETA QUEST' : `CHECKLIST ${completedSteps}/${activeMissionChecklist.length}`;
+    hint.textContent = timedQuestStart
+      ? (allChecked ? 'Timer attivo e checklist completa. Puoi chiudere la missione.' : 'Completa tutti i passaggi della checklist prima di confermare la quest.')
+      : 'Avvia il timer e segui i passaggi. La conferma finale si sblocca dopo la checklist.';
+  } else {
+    startBtn.classList.add('hidden');
+    stopBtn.classList.remove('hidden');
+    stopBtn.disabled = !allChecked;
+    stopBtn.textContent = allChecked ? '✔ CONFERMA COMPLETAMENTO' : `CHECKLIST ${completedSteps}/${activeMissionChecklist.length}`;
+    hint.textContent = allChecked
+      ? 'Checklist completa. Conferma la missione per ottenere XP, materiali e possibili drop.'
+      : 'Apri la missione, completa i passaggi e spunta la checklist per chiuderla.';
+  }
 }
 
 function startTimedQuest() {
   timedQuestStart = Date.now();
-  $('btnTqStart').classList.add('hidden');
-  $('btnTqStop').classList.remove('hidden');
   if (timedQuestInterval) clearInterval(timedQuestInterval);
   timedQuestInterval = setInterval(updateTimedQuestDisplay, 1000);
+  updateMissionActionState();
   updateTimedQuestDisplay();
 }
 
@@ -2918,20 +2977,26 @@ function updateTimedQuestDisplay() {
 }
 
 function stopTimedQuest() {
+  if (!activeMissionChecklist.every(Boolean)) {
+    showToast('Completa prima tutti i passaggi della checklist', 'alert');
+    return;
+  }
   if (timedQuestInterval) { clearInterval(timedQuestInterval); timedQuestInterval = null; }
-  if (!activeTimedQuest || !timedQuestStart) return;
-  const elapsed = Math.floor((Date.now() - timedQuestStart) / 1000);
+  if (!activeTimedQuest) return;
+  const elapsed = timedQuestStart ? Math.floor((Date.now() - timedQuestStart) / 1000) : 0;
   const timeBonus = calcTimeBonus(activeTimedQuest.quest, elapsed);
   const { quest, mode } = activeTimedQuest;
   $('timedQuestOverlay').classList.add('hidden');
   activeTimedQuest = null;
+  activeMissionChecklist = [];
   timedQuestStart = 0;
-  completeQuest(quest, mode, timeBonus);
+  completeQuest(quest, mode, quest.timed ? timeBonus : 1.0);
 }
 
 function cancelTimedQuest() {
   if (timedQuestInterval) { clearInterval(timedQuestInterval); timedQuestInterval = null; }
   activeTimedQuest = null;
+  activeMissionChecklist = [];
   timedQuestStart = 0;
   $('timedQuestOverlay').classList.add('hidden');
 }
@@ -3157,6 +3222,8 @@ function completeQuest(quest, mode, timeBonus) {
 
   renderQuests();
   renderStatus();
+  renderCodex();
+  renderGear();
   showSystemPopup({
     tone: 'reward',
     badge: 'SYSTEM',
@@ -3200,9 +3267,25 @@ function renderCodex() {
     }))
     .sort((a, b) => b.total - a.total);
   const setCounts = getEquippedSetCounts();
+  const guideCards = `
+    <div class="codex-card">
+      <div class="codex-card-title">COME LEGGERE NEURO-LEVELING</div>
+      <div class="codex-card-copy"><strong>Hunter Rank</strong> è il livello vero dell'account. <strong>Class Sync</strong> misura quanto la tua build segue la classe. Le <strong>quest</strong> alzano stat e rank. <strong>Boss</strong>, <strong>gear</strong>, <strong>set</strong> e <strong>forge</strong> moltiplicano la build.</div>
+      <div class="codex-chip-list">
+        <span class="codex-chip">1. Scan con Assessment</span>
+        <span class="codex-chip">2. Scegli la difficoltà</span>
+        <span class="codex-chip">3. Completa checklist missione</span>
+        <span class="codex-chip">4. Raccogli XP, materiali e drop</span>
+      </div>
+    </div>
+    <div class="codex-card">
+      <div class="codex-card-title">GEAR FLOW</div>
+      <div class="codex-card-copy">Le Special Quest sbloccano pezzi o varianti dello stesso slot. I materiali servono per la forge +1/+2/+3. I boss rilasciano drop unici e upgrade permanenti ai set.</div>
+    </div>`;
 
   const codexPages = {
     rank: `
+      ${guideCards}
       <div class="codex-card">
         <div class="codex-card-title">RANK PROTOCOL</div>
         <div class="codex-card-copy">Hunter Rank è il livello globale del profilo. Parte dall'assessment iniziale e poi sale solo con quest, boss, gear e drop. Class Sync misura invece quanto la tua classe è allineata alla build attuale.</div>
@@ -3338,12 +3421,13 @@ function renderCodex() {
 function renderGear() {
   const powerEl = $('gearPowerValue');
   const descEl = $('gearPowerDesc');
+  const blueprintEl = $('gearBlueprintList');
   const setListEl = $('gearSetList');
   const materialsEl = $('gearMaterialsList');
   const slotsEl = $('gearSlotsGrid');
   const inventoryEl = $('gearInventoryList');
   const consumablesEl = $('gearConsumablesList');
-  if (!powerEl || !descEl || !setListEl || !materialsEl || !slotsEl || !inventoryEl || !consumablesEl) return;
+  if (!powerEl || !descEl || !blueprintEl || !setListEl || !materialsEl || !slotsEl || !inventoryEl || !consumablesEl) return;
 
   const totalPower = getTotalGearPower();
   const equippedCount = Object.values(state.equippedGear || {}).filter(Boolean).length;
@@ -3351,6 +3435,20 @@ function renderGear() {
   descEl.textContent = totalPower
     ? `${equippedCount}/${EQUIPMENT_SLOTS.length} slot attivi. Bonus item e set gia applicati ai requisiti e ai livelli mostrati.`
     : 'Completa le quest speciali per riempire il loadout e sbloccare bonus progressivi di set.';
+
+  blueprintEl.innerHTML = EQUIPMENT_SLOTS.map(slot => {
+    const equippedItem = getEquippedItem(slot);
+    const sourceQuests = getSlotBlueprintQuests(slot);
+    const sourceText = sourceQuests.length
+      ? sourceQuests.map(quest => `${quest.icon} ${quest.name}`).join(' · ')
+      : 'Slot alimentato da boss drop o varianti avanzate.';
+    return `
+      <div class="gear-blueprint-card ${equippedItem ? 'active' : ''}">
+        <div class="gear-blueprint-slot">${EQUIPMENT_SLOT_LABELS[slot]}</div>
+        <div class="gear-blueprint-state">${equippedItem ? `${equippedItem.icon} ${getItemDisplayName(equippedItem)}` : 'Slot vuoto'}</div>
+        <div class="gear-blueprint-source">${sourceText}</div>
+      </div>`;
+  }).join('');
 
   const setCounts = getEquippedSetCounts();
   setListEl.innerHTML = Object.entries(EQUIPMENT_SET_BONUSES).map(([setId, setDef]) => {
@@ -3402,7 +3500,7 @@ function renderGear() {
           <div class="gear-item-bonuses">${bonuses}</div>
           <div class="gear-slot-meta">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}${upgradeLevel ? ` · FORGE +${upgradeLevel}` : ''}</div>
           <button class="btn ghost" data-unequip-slot="${slot}">Rimuovi</button>` : `
-          <div class="gear-slot-empty">Slot vuoto. Completa la quest speciale collegata per attivarlo.</div>`}
+            <div class="gear-slot-empty">Slot vuoto. ${getSlotBlueprintQuests(slot).length ? `Farmalo con ${getSlotBlueprintQuests(slot).map(quest => quest.name).join(' / ')}.` : 'Continua con special quest e boss avanzati per sbloccarlo.'}</div>`}
       </div>`;
   }).join('');
 

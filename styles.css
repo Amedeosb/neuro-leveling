@@ -164,6 +164,12 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .gear-power-label{font-family:var(--font-m);font-size:.74rem;letter-spacing:2px;color:var(--text-muted);margin-bottom:6px}
 .gear-power-value{font-family:var(--font-d);font-size:2rem;font-weight:900;color:var(--primary);text-shadow:0 0 18px rgba(0,212,255,.35)}
 .gear-power-desc{font-size:.86rem;color:var(--text-dim);line-height:1.45}
+.gear-blueprint-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.gear-blueprint-card{padding:12px;border-radius:12px;border:1px solid var(--border);background:rgba(255,255,255,.03)}
+.gear-blueprint-card.active{border-color:rgba(0,255,136,.28);box-shadow:0 0 0 1px rgba(0,255,136,.08)}
+.gear-blueprint-slot{font-family:var(--font-d);font-size:.78rem;letter-spacing:1.2px;margin-bottom:6px}
+.gear-blueprint-state{font-family:var(--font-m);font-size:.7rem;color:var(--primary);margin-bottom:6px}
+.gear-blueprint-source{font-family:var(--font-m);font-size:.68rem;line-height:1.45;color:var(--text-muted)}
 .gear-set-list{display:grid;gap:10px;margin-bottom:18px}
 .gear-set-card{padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.03)}
 .gear-set-card.active{border-color:rgba(0,212,255,.24);box-shadow:0 0 0 1px rgba(0,212,255,.08)}
@@ -296,6 +302,7 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .codex-card{padding:14px;border-radius:12px;border:1px solid var(--border);background:rgba(255,255,255,.03)}
 .codex-card-title{font-family:var(--font-d);font-size:.84rem;letter-spacing:1.5px;color:var(--primary);margin-bottom:8px}
 .codex-card-copy{font-size:.9rem;line-height:1.55;color:var(--text-dim)}
+.codex-card-copy strong{color:var(--text)}
 .codex-list{display:grid;gap:8px}
 .codex-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid rgba(255,255,255,.06)}
 .codex-row:first-child{border-top:none;padding-top:0}
@@ -417,6 +424,7 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 @media (max-width: 640px){
   .system-popup-layer{left:12px;right:12px;width:auto}
   .screen-content{padding:18px 14px calc(16px + var(--safe-b))}
+  .gear-blueprint-list{grid-template-columns:1fr}
 }
 
 @media (max-width: 640px){
@@ -541,13 +549,18 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height
 .tq-box{max-width:380px;width:92%}
 .tq-header{display:flex;flex-direction:column;align-items:center;gap:6px}
 .tq-mode-badge{font-family:var(--font-d);font-size:1rem;font-weight:900;letter-spacing:3px}
+.tq-desc{font-family:var(--font-m);font-size:.86rem;line-height:1.55;color:var(--text-dim);text-align:center;margin:10px 0 2px}
 .tq-target{font-family:var(--font-m);font-size:.9rem;color:var(--text-dim);margin:10px 0}
 .tq-timer-display{text-align:center;margin:16px 0}
 .tq-elapsed{font-family:var(--font-m);font-size:3rem;font-weight:700;color:var(--primary);text-shadow:0 0 20px rgba(0,212,255,.3);letter-spacing:4px}
 .tq-bonus-prev{font-family:var(--font-d);font-size:.9rem;font-weight:700;margin-top:6px;letter-spacing:1px;transition:color .3s}
-.tq-protocol{max-height:200px;overflow-y:auto;text-align:left;padding:10px;background:rgba(255,255,255,.03);border-radius:6px;margin:12px 0;font-family:var(--font-m);font-size:.82rem;color:var(--text-dim);line-height:1.7}
-.tq-protocol ol{padding-left:18px;margin:0}
-.tq-protocol li{margin-bottom:4px}
+.tq-checklist{display:grid;gap:8px;max-height:260px;overflow-y:auto;text-align:left;padding:10px;background:rgba(255,255,255,.03);border-radius:6px;margin:12px 0}
+.tq-check-item{display:flex;align-items:flex-start;gap:10px;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02)}
+.tq-check-item.done{border-color:rgba(0,255,136,.24);background:rgba(0,255,136,.06)}
+.tq-check-item input{margin-top:3px;accent-color:var(--primary)}
+.tq-check-copy{font-family:var(--font-m);font-size:.8rem;line-height:1.55;color:var(--text-dim)}
+.tq-science{padding:10px 12px;border-radius:8px;border:1px solid rgba(0,212,255,.12);background:rgba(0,212,255,.05);font-family:var(--font-m);font-size:.76rem;line-height:1.55;color:var(--text-dim)}
+.tq-hint{font-family:var(--font-m);font-size:.72rem;line-height:1.45;color:var(--text-muted);text-align:center;margin-top:10px}
 .tq-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px}
 
 /* ==================== CUSTOM QUEST MODAL ==================== */

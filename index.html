@@ -318,7 +318,12 @@
         <h1 class="screen-title glitch-text" data-text="SYSTEM CODEX">SYSTEM CODEX</h1>
         <p class="screen-sub">Manuale del sistema: rank, stat, boss, loot table e bonus set.</p>
         <div class="codex-tabs" id="codexTabs"></div>
-        <div class="codex-content" id="codexContent"></div>
+        <div class="codex-content" id="codexContent">
+          <div class="codex-card">
+            <div class="codex-card-title">BOOTING CODEX</div>
+            <div class="codex-card-copy">Il sistema sta caricando le guide operative. Se resti su questa schermata, il Codex verrà popolato con regole di Rank, missioni, boss, loot e set bonus.</div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -344,6 +349,7 @@
           <div class="gear-power-value" id="gearPowerValue">+0</div>
           <div class="gear-power-desc" id="gearPowerDesc">Nessun bonus attivo</div>
         </div>
+        <div class="gear-blueprint-list" id="gearBlueprintList"></div>
         <div class="gear-set-list" id="gearSetList"></div>
         <div class="section-label">MATERIALS</div>
         <div class="gear-materials-list" id="gearMaterialsList"></div>
@@ -426,12 +432,15 @@
         <h2 class="ov-title" id="tqName">Quest</h2>
         <div class="tq-mode-badge" id="tqMode">MEDIA</div>
       </div>
+      <div class="tq-desc" id="tqDesc">Descrizione missione.</div>
       <div class="tq-target" id="tqTarget">Obiettivo: 30 min</div>
-      <div class="tq-timer-display">
+      <div class="tq-timer-display" id="tqTimerDisplay">
         <div class="tq-elapsed" id="tqElapsed">00:00</div>
         <div class="tq-bonus-prev" id="tqBonusPrev">Avvia per iniziare</div>
       </div>
-      <div class="tq-protocol" id="tqProtocol"></div>
+      <div class="tq-checklist" id="tqChecklist"></div>
+      <div class="tq-science" id="tqScience"></div>
+      <div class="tq-hint" id="tqHint">Seleziona i passaggi eseguiti per chiudere la missione.</div>
       <div class="tq-actions">
         <button class="btn-primary full-w" id="btnTqStart">▶ AVVIA TIMER</button>
         <button class="btn-primary full-w hidden" id="btnTqStop">✔ COMPLETA QUEST</button>
