@@ -15,6 +15,7 @@ let _systemPopupInterval = null;
 let _lastSystemPopupAt = 0;
 let _systemAudioContext = null;
 let _systemAudioUnlocked = false;
+let _gearCooldownInterval = null;
 const _domReadyPromise = document.readyState === 'loading'
   ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
   : Promise.resolve();
@@ -861,9 +862,9 @@ const ACHIEVEMENT_DEFINITIONS = [
   { id:'combo_first',  name:'COMBO STARTER',    icon:'🔗', desc:'Attiva la prima combo.',       check:s=>(s.totalCombos||0)>=1 },
   { id:'combo_king',   name:'COMBO KING',       icon:'👑', desc:'Attiva 25 combo.',             check:s=>(s.totalCombos||0)>=25 },
   { id:'chain_first',  name:'CHAIN MASTER',     icon:'⛓️', desc:'Completa una catena.',          check:s=>Object.values(s.chainProgress||{}).some(c=>c.completed) },
-  { id:'class_10',     name:'CLASS ASCENSION',  icon:'🌟', desc:'Livello classe 10.',           check:s=>getClassLevel()>=10 },
-  { id:'lv_30',        name:'SHADOW ADEPT',     icon:'🌑', desc:'Livello totale 30+.',          check:s=>getTotalLevel()>=30 },
-  { id:'lv_60',        name:'MONARCH',          icon:'👁', desc:'Livello totale 60+.',          check:s=>getTotalLevel()>=60 },
+  { id:'class_10',     name:'CLASS ASCENSION',  icon:'🌟', desc:'Class Sync 10.',               check:s=>getClassLevel()>=10 },
+  { id:'lv_30',        name:'SHADOW ADEPT',     icon:'🌑', desc:'Hunter Rank 30+.',             check:s=>getTotalLevel()>=30 },
+  { id:'lv_60',        name:'MONARCH',          icon:'👁', desc:'Hunter Rank 60+.',             check:s=>getTotalLevel()>=60 },
   { id:'crit_10',      name:'LUCKY STRIKER',    icon:'⚡', desc:'10 colpi critici.',            check:s=>(s.criticalHits||0)>=10 },
   { id:'xp_10k',       name:'XP HARVESTER',     icon:'💰', desc:'Accumula 10.000 XP.',          check:s=>s.totalXP>=10000 },
   { id:'xp_100k',      name:'XP OVERLORD',      icon:'💎', desc:'Accumula 100.000 XP.',         check:s=>s.totalXP>=100000 },
@@ -1104,6 +1105,105 @@ const LEGACY_SLOT_MAP = {
   ACCESSORY: 'AMULET',
 };
 
+Object.assign(EQUIPMENT_CATALOG, {
+  HUNTER_LONGBOW: {
+    id: 'HUNTER_LONGBOW', slot: 'WEAPON_MAIN', set: 'SHADOWFORGED', name: 'Hunter Longbow', icon: '🏹', rarity: 'RARE',
+    desc: 'Versione agile e pulita per run rapidi e precisione costante.', bonuses: { AGI: 1, FOC: 1 },
+  },
+  OBLIVION_CROWN: {
+    id: 'OBLIVION_CROWN', slot: 'HELMET', set: 'MONARCH_SYNTH', name: 'Oblivion Crown', icon: '🪖', rarity: 'EPIC',
+    desc: 'Corona tattica per raid cognitivi lunghi e pensiero freddo.', bonuses: { INT: 1, DIS: 1, FOC: 1 },
+  },
+  ECHO_AMULET: {
+    id: 'ECHO_AMULET', slot: 'AMULET', set: 'MONARCH_SYNTH', name: 'Echo Amulet', icon: '🜂', rarity: 'RARE',
+    desc: 'Amplifica presenza, tono e regolazione interpersonale.', bonuses: { EMP: 1, CHA: 1, VAG: 1 },
+  },
+  IRON_LOOP: {
+    id: 'IRON_LOOP', slot: 'RING_LEFT', set: 'IRON_HEART', name: 'Iron Loop', icon: '🪙', rarity: 'EPIC',
+    desc: 'Anello da carico e tenuta. Ideale nei giorni di volume alto.', bonuses: { STR: 1, RES: 1, VIT: 1 },
+  },
+  GHOST_RING: {
+    id: 'GHOST_RING', slot: 'RING_RIGHT', set: 'SHADOWFORGED', name: 'Ghost Ring', icon: '💠', rarity: 'EPIC',
+    desc: 'Riduce attrito mentale e rende i movimenti più invisibili.', bonuses: { AGI: 1, ADA: 1, FOC: 1 },
+  },
+  TITAN_PLATE: {
+    id: 'TITAN_PLATE', slot: 'BODY', set: 'IRON_HEART', name: 'Titan Plate', icon: '🛡️', rarity: 'LEGENDARY',
+    desc: 'Armatura boss-tier per build ad alta tenuta e sforzo prolungato.', bonuses: { STR: 2, RES: 2, VIT: 1 },
+  },
+  SURGE_GAUNTLETS: {
+    id: 'SURGE_GAUNTLETS', slot: 'GLOVES', set: 'SHADOWFORGED', name: 'Surge Gauntlets', icon: '🥊', rarity: 'EPIC',
+    desc: 'Guanti per output esplosivo e precisione sotto pressione.', bonuses: { STR: 1, AGI: 1, DIS: 1 },
+  },
+  REINFORCED_SASH: {
+    id: 'REINFORCED_SASH', slot: 'BELT', set: 'IRON_HEART', name: 'Reinforced Sash', icon: '🎗️', rarity: 'RARE',
+    desc: 'Sash per stabilità centrale e controllo respiratorio.', bonuses: { RES: 1, CO2: 1, VAG: 1 },
+  },
+  PHANTOM_BOOTS: {
+    id: 'PHANTOM_BOOTS', slot: 'BOOTS', set: 'SHADOWFORGED', name: 'Phantom Boots', icon: '👢', rarity: 'LEGENDARY',
+    desc: 'Stivali boss-tier per tracking, rapidità e adattamento.', bonuses: { AGI: 2, ADA: 2 },
+  },
+  GOLDEN_FLASK: {
+    id: 'GOLDEN_FLASK', slot: 'FLASK_ONE', set: 'MONARCH_SYNTH', name: 'Golden Flask', icon: '🍯', rarity: 'EPIC',
+    desc: 'Flask raro per boss push e spike di volontà.', bonuses: { WIL: 1, FOC: 1, VIT: 1 },
+  },
+  VOID_FLASK: {
+    id: 'VOID_FLASK', slot: 'FLASK_TWO', set: 'MONARCH_SYNTH', name: 'Void Flask', icon: '🧿', rarity: 'LEGENDARY',
+    desc: 'Flask d’élite per scan profondi e focus da raid finale.', bonuses: { INT: 1, FOC: 2 },
+  },
+  ANXIETY_WARD: {
+    id: 'ANXIETY_WARD', slot: 'AMULET', set: 'MONARCH_SYNTH', name: 'Anxiety Ward', icon: '🜁', rarity: 'LEGENDARY',
+    desc: 'Drop unico del Wraith: calma chirurgica sotto allerta.', bonuses: { VAG: 2, CO2: 1, WIL: 1 },
+  },
+  GOLEM_CORE: {
+    id: 'GOLEM_CORE', slot: 'BELT', set: 'IRON_HEART', name: 'Golem Core', icon: '🧱', rarity: 'LEGENDARY',
+    desc: 'Nucleo del Golem: densità, tenuta, resistenza alla letargia.', bonuses: { RES: 2, VIT: 2 },
+  },
+  LEECH_SPIKE: {
+    id: 'LEECH_SPIKE', slot: 'WEAPON_OFF', set: 'SHADOWFORGED', name: 'Leech Spike', icon: '🗡', rarity: 'EPIC',
+    desc: 'Drop unico anti-procrastinazione. Aggredisce attrito e inerzia.', bonuses: { DIS: 2, FOC: 1 },
+  },
+  BERSERKER_EMBLEM: {
+    id: 'BERSERKER_EMBLEM', slot: 'RING_RIGHT', set: 'IRON_HEART', name: 'Berserker Emblem', icon: '🔥', rarity: 'LEGENDARY',
+    desc: 'Trasforma rabbia grezza in output disciplinato.', bonuses: { STR: 2, WIL: 1, RES: 1 },
+  },
+});
+
+const SPECIAL_QUEST_LOOT_TABLES = {
+  shadow_recurve_trial: [{ itemId:'HUNTER_LONGBOW', weight:65 }, { itemId:'SHADOW_RECURVE', weight:35 }],
+  quiver_zero_protocol: [{ itemId:'QUIVER_ZERO', weight:75 }, { itemId:'LEECH_SPIKE', weight:25 }],
+  monarch_helm_scan: [{ itemId:'OBLIVION_CROWN', weight:65 }, { itemId:'MONARCH_HELM', weight:35 }],
+  vagal_amulet_recovery: [{ itemId:'ECHO_AMULET', weight:70 }, { itemId:'VAGAL_AMULET', weight:30 }],
+  lucid_ring_alpha: [{ itemId:'LUCID_RING_ALPHA', weight:70 }, { itemId:'IRON_LOOP', weight:30 }],
+  co2_loop_dive: [{ itemId:'CO2_LOOP', weight:70 }, { itemId:'GHOST_RING', weight:30 }],
+  iron_heart_forge: [{ itemId:'IRON_HEART_CUIRASS', weight:75 }, { itemId:'TITAN_PLATE', weight:25 }],
+  grip_protocol_gloves: [{ itemId:'GRIP_PROTOCOL', weight:70 }, { itemId:'SURGE_GAUNTLETS', weight:30 }],
+  core_bind_belt: [{ itemId:'REINFORCED_SASH', weight:65 }, { itemId:'CORE_BIND', weight:35 }],
+  stalker_boots_run: [{ itemId:'STALKER_BOOTS', weight:70 }, { itemId:'PHANTOM_BOOTS', weight:30 }],
+  crimson_flask_brew: [{ itemId:'CRIMSON_FLASK', weight:70 }, { itemId:'GOLDEN_FLASK', weight:30 }],
+  azure_flask_sync: [{ itemId:'AZURE_FLASK', weight:70 }, { itemId:'VOID_FLASK', weight:30 }],
+};
+
+const BOSS_DROP_TABLES = {
+  ANXIETY_WRAITH: [{ itemId:'ANXIETY_WARD', weight:100 }],
+  LETHARGY_GOLEM: [{ itemId:'GOLEM_CORE', weight:100 }],
+  PROCRASTINATION_LEECH: [{ itemId:'LEECH_SPIKE', weight:100 }],
+  ANGER_BERSERKER: [{ itemId:'BERSERKER_EMBLEM', weight:100 }],
+};
+
+const BOSS_SET_UPGRADES = {
+  ANXIETY_WRAITH: { setId:'MONARCH_SYNTH', bonuses:{ VAG:1 } },
+  LETHARGY_GOLEM: { setId:'IRON_HEART', bonuses:{ RES:1 } },
+  PROCRASTINATION_LEECH: { setId:'SHADOWFORGED', bonuses:{ DIS:1 } },
+  ANGER_BERSERKER: { setId:'IRON_HEART', bonuses:{ STR:1 } },
+};
+
+const FLASK_EFFECTS = {
+  CRIMSON_FLASK: { name:'Crimson Flask Burst', icon:'🧪', cooldownMs: 1000 * 60 * 8, buffId:'IRON_HEART' },
+  GOLDEN_FLASK: { name:'Golden Flask Surge', icon:'🍯', cooldownMs: 1000 * 60 * 12, buffId:'XP_CRYSTAL' },
+  AZURE_FLASK: { name:'Azure Flask Focus', icon:'🧴', cooldownMs: 1000 * 60 * 8, buffId:'FOCUS_SHARD' },
+  VOID_FLASK: { name:'Void Flask Overclock', icon:'🧿', cooldownMs: 1000 * 60 * 14, buffId:'NEURAL_SURGE' },
+};
+
 // ========================
 // FACTIONS
 // ========================
@@ -1154,6 +1254,7 @@ const DEFAULT_STATE = {
   playerName: '',
   playerClass: null,
   classLevel: 1,
+  onboardingRank: 1,
   stats: {},
   totalXP: 0,
   currentStreak: 0,
@@ -1181,6 +1282,8 @@ const DEFAULT_STATE = {
   ownedEquipment: [],
   equippedGear: createEmptyGearSlots(),
   specialQuestCompleted: [],
+  setUpgrades: {},
+  flaskCooldowns: {},
 };
 
 let state = loadState(); // Carica subito da localStorage
@@ -1207,7 +1310,11 @@ function initStats() {
 // GAME LOGIC HELPERS
 // ========================
 
-function xpForLevel(lv) { return Math.floor(100 * Math.pow(lv, 1.5)); }
+function xpForLevel(lv) { return Math.floor(28 + Math.pow(lv, 1.28) * 18); }
+
+function xpForHunterRank(rank) {
+  return Math.floor(36 + Math.pow(rank, 1.24) * 18);
+}
 
 function getStatLv(id) { return state.stats[id]?.lv ?? 1; }
 
@@ -1218,7 +1325,7 @@ function getEquipmentBonusForStat(statId) {
     const item = EQUIPMENT_CATALOG[itemId];
     return sum + (item?.bonuses?.[statId] || 0);
   }, 0);
-  return itemBonus + getSetBonusForStat(statId);
+  return itemBonus + getSetBonusForStat(statId) + getSetUpgradeBonusForStat(statId);
 }
 
 function getEquippedSetCounts() {
@@ -1271,7 +1378,19 @@ function addStatXP(id, amount) {
 }
 
 function getTotalLevel() {
-  return PRIMARY_STATS.reduce((a,s) => a + getStatLv(s.id), 0);
+  return getHunterRankInfo().rank;
+}
+
+function getHunterRankInfo() {
+  let rank = Math.max(1, Math.min(20, state.onboardingRank || 1));
+  let xpPool = Math.max(0, state.totalXP || 0);
+  while (rank < 99) {
+    const need = xpForHunterRank(rank + 1);
+    if (xpPool < need) return { rank, xpIntoRank: xpPool, nextXp: need };
+    xpPool -= need;
+    rank++;
+  }
+  return { rank: 99, xpIntoRank: 0, nextXp: 0 };
 }
 
 function getTitle() {
@@ -1312,6 +1431,73 @@ function getOwnedEquipmentItems() {
     .sort((a, b) => EQUIPMENT_SLOTS.indexOf(a.slot) - EQUIPMENT_SLOTS.indexOf(b.slot));
 }
 
+function rollLootTable(table) {
+  if (!Array.isArray(table) || !table.length) return null;
+  const total = table.reduce((sum, entry) => sum + (entry.weight || 0), 0);
+  let roll = Math.random() * total;
+  for (const entry of table) {
+    roll -= entry.weight || 0;
+    if (roll <= 0) return entry.itemId;
+  }
+  return table[table.length - 1].itemId;
+}
+
+function getQuestDropItemId(quest) {
+  return rollLootTable(SPECIAL_QUEST_LOOT_TABLES[quest.id]) || quest.equipmentId || null;
+}
+
+function grantSetUpgrade(setId, bonuses, sourceLabel='Boss Reward') {
+  if (!setId || !bonuses) return;
+  if (!state.setUpgrades) state.setUpgrades = {};
+  const current = state.setUpgrades[setId] || {};
+  for (const [statId, amount] of Object.entries(bonuses)) {
+    current[statId] = (current[statId] || 0) + amount;
+  }
+  state.setUpgrades[setId] = current;
+  showToast(`✦ Upgrade set ${EQUIPMENT_SET_BONUSES[setId]?.name || setId}`, 'levelup');
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'SET UPGRADE',
+    title: 'SET POTENZIATO',
+    body: `${sourceLabel}: ${EQUIPMENT_SET_BONUSES[setId]?.name || setId} ora concede ${Object.entries(bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')} extra quando indossi il set.`,
+    sound: 'reward',
+  });
+}
+
+function getSetUpgradeBonusForStat(statId) {
+  return Object.values(state.setUpgrades || {}).reduce((sum, upgrade) => sum + (upgrade?.[statId] || 0), 0);
+}
+
+function isFlaskItem(itemId) {
+  return !!FLASK_EFFECTS[itemId];
+}
+
+function getFlaskCooldownRemaining(itemId) {
+  const until = state.flaskCooldowns?.[itemId] || 0;
+  return Math.max(0, until - Date.now());
+}
+
+function useFlask(itemId) {
+  const effect = FLASK_EFFECTS[itemId];
+  if (!effect) return;
+  if (getFlaskCooldownRemaining(itemId) > 0) {
+    showToast(`${effect.icon} Flask in cooldown`, 'alert');
+    return;
+  }
+  if (!state.flaskCooldowns) state.flaskCooldowns = {};
+  state.flaskCooldowns[itemId] = Date.now() + effect.cooldownMs;
+  addBuff(effect.buffId);
+  saveState();
+  renderGear();
+  showSystemPopup({
+    tone: 'reward',
+    badge: 'FLASK',
+    title: `${effect.name} ATTIVATO`,
+    body: `Cooldown avviato. Effetto consumabile applicato al sistema e pronto a influenzare il prossimo run.`,
+    sound: 'reward',
+  });
+}
+
 function getEquippedItem(slot) {
   const itemId = state.equippedGear?.[slot];
   return itemId ? EQUIPMENT_CATALOG[itemId] : null;
@@ -1341,7 +1527,10 @@ function awardEquipment(itemId) {
   const item = EQUIPMENT_CATALOG[itemId];
   if (!item) return;
   if (!state.ownedEquipment) state.ownedEquipment = [];
-  if (state.ownedEquipment.includes(itemId)) return;
+  if (state.ownedEquipment.includes(itemId)) {
+    if (item.set) grantSetUpgrade(item.set, Object.fromEntries(Object.keys(item.bonuses).slice(0,1).map(statId => [statId, 1])), item.name);
+    return;
+  }
   state.ownedEquipment.push(itemId);
   if (!state.equippedGear) state.equippedGear = createEmptyGearSlots();
   if (!state.equippedGear[item.slot]) state.equippedGear[item.slot] = itemId;
@@ -1575,13 +1764,12 @@ function getClassLevel() {
   if (!state.playerClass) return 1;
   const cl = CLASS_DEFINITIONS.find(c=>c.id===state.playerClass);
   if (!cl) return 1;
-  let sum = 0;
-  for (const pid of cl.primary) sum += getStatLv(pid);
-  // secondary stats that derive from primary
-  for (const s of SECONDARY_STATS) {
-    if (s.derivedFrom.some(d => cl.primary.includes(d))) sum += Math.floor(getStatLv(s.id) * 0.5);
-  }
-  return Math.max(1, Math.floor(sum / cl.primary.length));
+  const primaryAvg = cl.primary.reduce((sum, pid) => sum + getStatLv(pid), 0) / cl.primary.length;
+  const supportStats = SECONDARY_STATS.filter(s => s.derivedFrom.some(d => cl.primary.includes(d)));
+  const supportAvg = supportStats.length
+    ? supportStats.reduce((sum, stat) => sum + getStatLv(stat.id), 0) / supportStats.length
+    : 1;
+  return Math.max(1, Math.round(primaryAvg * 0.7 + supportAvg * 0.35));
 }
 
 // ========================
@@ -1694,6 +1882,7 @@ function buildSystemPrompt() {
   const cls = CLASS_DEFINITIONS.find(c => c.id === state.playerClass);
   const clsName = cls?.name ?? 'Hunter';
   const lv = getTotalLevel();
+  const classSync = getClassLevel();
   const streak = state.currentStreak;
   const lastA = state.assessmentHistory[state.assessmentHistory.length - 1];
   const debuffs = state.activeDebuffs || [];
@@ -1711,8 +1900,8 @@ Evita frasi corporate o troppo adulte: la sensazione deve essere da sistema urge
 
 CONTESTO GIOCATORE:
 - Nome: ${state.playerName || 'Hunter'}
-- Classe: ${clsName} (LV.${getClassLevel()})
-- Livello totale: ${lv}
+- Classe: ${clsName} (Class Sync ${classSync})
+- Hunter Rank: ${lv}
 - Streak: ${streak} giorni
 - Quest completate oggi: ${todayDone}
 - Quest totali: ${totalQuests}
@@ -1783,14 +1972,14 @@ function companionReplyLocal(msg) {
 
   // Greetings
   if (/^(ciao|hey|salve|buon)/.test(m))
-    return `Salve, ${clsName}. Livello totale ${lv}, streak di ${streak} giorni. Come posso aiutarti?`;
+    return `Salve, ${clsName}. Hunter Rank ${lv}, streak di ${streak} giorni. Come posso aiutarti?`;
 
   // Stats / Status
   if (/stat|livell|level|punti|profilo|come sto/.test(m)) {
     const top3 = [...PRIMARY_STATS].sort((a,b)=>getStatLv(b.id)-getStatLv(a.id)).slice(0,3);
     const weak = [...PRIMARY_STATS].sort((a,b)=>getStatLv(a.id)-getStatLv(b.id))[0];
     return `Le tue stat migliori: ${top3.map(s=>`${s.name} LV.${getStatLv(s.id)}`).join(', ')}. ` +
-      `Punto debole: ${weak.name} LV.${getStatLv(weak.id)}. Ti consiglio di lavorarci con quest mirate.`;
+      `Stat più fragile: ${weak.name} LV.${getStatLv(weak.id)}. Se la rinforzi, aumenti davvero la qualità della build.`;
   }
 
   // Quest advice
@@ -1839,7 +2028,7 @@ function companionReplyLocal(msg) {
 
   // Class
   if (/class|percorso|specializzazione|ruolo/.test(m))
-    return `La tua classe è ${clsName} (LV.${getClassLevel()}). Ogni punto nelle stat primarie della classe accelera la progressione. Continua a fare quest allineate al tuo percorso.`;
+    return `La tua classe è ${clsName} con Class Sync ${getClassLevel()}. Hunter Rank è il livello globale, mentre la Class Sync misura quanto la tua build sta diventando davvero coerente.`;
 
   // Streak
   if (/streak|cosecutiv|giorni/.test(m))
@@ -1856,7 +2045,7 @@ function companionReplyLocal(msg) {
   // Default
   const tips = [
     `Ricorda, ${clsName}: la costanza batte l'intensità. ${streak} giorni di streak è un buon inizio.`,
-    `Il tuo livello totale è ${lv}. Ogni quest completata ti avvicina al prossimo titolo.`,
+    `Il tuo Hunter Rank è ${lv}. Ogni quest completata ti avvicina al prossimo titolo.`,
     'Chiedimi di stat, quest, boss, sonno, respirazione, stress, motivazione o biohacking.',
     `Hai ${state.questsCompleted} quest completate e ${state.bossesDefeated.length} boss sconfitti. Continua così.`,
     'La neuroplasticità è dalla tua parte. Ogni protocollo eseguito crea nuovi circuiti neurali.',
@@ -1980,6 +2169,10 @@ function processOnboarding() {
     state.stats[s.id] = { lv: val, xp: 0 };
   }
 
+  const primaryAvg = Object.values(primaryMap).reduce((sum, value) => sum + value, 0) / Object.keys(primaryMap).length;
+  const secondaryAvg = SECONDARY_STATS.reduce((sum, stat) => sum + state.stats[stat.id].lv, 0) / SECONDARY_STATS.length;
+  state.onboardingRank = Math.max(1, Math.min(20, Math.round(primaryAvg * 0.9 + secondaryAvg * 0.55)));
+
   // Determine class
   const cl = determineClass(primaryMap);
   state.playerClass = cl.id;
@@ -1990,7 +2183,7 @@ function processOnboarding() {
   $('classIcon').textContent = cl.icon;
   $('className').textContent = cl.name;
   $('className').dataset.text = cl.name;
-  $('classDesc').textContent = cl.desc;
+  $('classDesc').textContent = `${cl.desc} Partenza registrata: Hunter Rank ${state.onboardingRank}, Class Sync ${getClassLevel()}. Da qui in avanti sali solo con quest, boss, gear e consumabili.`;
 
   // Stats preview
   const preview = $('statsPreview');
@@ -2221,22 +2414,27 @@ function renderStatus() {
   nm.dataset.text = nm.textContent;
 
   const cl = CLASS_DEFINITIONS.find(c=>c.id===state.playerClass);
-  $('playerClassBadge').textContent = cl ? `${cl.icon} ${cl.name} LV.${getClassLevel()}` : '';
+  $('playerClassBadge').textContent = cl ? `${cl.icon} ${cl.name} · Class Sync ${getClassLevel()}` : '';
   $('playerTitleBar').textContent = getTitle();
-  $('totalLvPill').textContent = getTotalLevel();
+  const rankInfo = getHunterRankInfo();
+  $('totalLvPill').textContent = rankInfo.rank;
 
-  // XP bar — combined residual XP of all stats vs combined next-level threshold
-  const ALL_STATS = [...PRIMARY_STATS, ...SECONDARY_STATS];
-  let xpCur = 0, xpNeed = 0;
-  for (const s of ALL_STATS) {
-    const lv = getStatLv(s.id);
-    xpCur += state.stats[s.id]?.xp ?? 0;
-    xpNeed += xpForLevel(lv + 1);
-  }
-  const pct = xpNeed > 0 ? Math.min((xpCur / xpNeed) * 100, 100) : 0;
+  // XP bar — hunter rank progression from total earned XP after onboarding rank
+  const pct = rankInfo.nextXp > 0 ? Math.min((rankInfo.xpIntoRank / rankInfo.nextXp) * 100, 100) : 100;
   $('xpBarFill').style.width = pct+'%';
-  $('xpCur').textContent = xpCur;
-  $('xpNext').textContent = xpNeed;
+  $('xpCur').textContent = rankInfo.xpIntoRank;
+  $('xpNext').textContent = rankInfo.nextXp;
+
+  const guide = $('systemGuideCard');
+  if (guide) {
+    guide.innerHTML = `
+      <div class="system-guide-title">COME LEGGERE IL SISTEMA</div>
+      <div class="system-guide-copy">Hunter Rank è il tuo livello vero e sale con quest e boss. Class Sync misura quanto la tua build è allineata alla classe scelta. Le stat mostrano la forza dei singoli attributi, con bonus da gear e set già inclusi.</div>
+      <div class="system-guide-mini">
+        <div class="system-guide-pill">Hunter Rank ${rankInfo.rank} · progressione account</div>
+        <div class="system-guide-pill">Class Sync ${getClassLevel()} · potenza specializzazione</div>
+      </div>`;
+  }
 
   // Primary stats
   const priEl = $('statsPrimary');
@@ -2784,7 +2982,8 @@ function completeQuest(quest, mode, timeBonus) {
   if (quest.type === 'SPECIAL') {
     if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
     if (!state.specialQuestCompleted.includes(quest.id)) state.specialQuestCompleted.push(quest.id);
-    if (quest.equipmentId) awardEquipment(quest.equipmentId);
+    const dropItemId = getQuestDropItemId(quest);
+    if (dropItemId) awardEquipment(dropItemId);
   }
 
   // Faction rep
@@ -2860,7 +3059,8 @@ function renderGear() {
   const setListEl = $('gearSetList');
   const slotsEl = $('gearSlotsGrid');
   const inventoryEl = $('gearInventoryList');
-  if (!powerEl || !descEl || !setListEl || !slotsEl || !inventoryEl) return;
+  const consumablesEl = $('gearConsumablesList');
+  if (!powerEl || !descEl || !setListEl || !slotsEl || !inventoryEl || !consumablesEl) return;
 
   const totalPower = getTotalGearPower();
   const equippedCount = Object.values(state.equippedGear || {}).filter(Boolean).length;
@@ -2872,17 +3072,21 @@ function renderGear() {
   const setCounts = getEquippedSetCounts();
   setListEl.innerHTML = Object.entries(EQUIPMENT_SET_BONUSES).map(([setId, setDef]) => {
     const count = setCounts[setId] || 0;
+    const upgrades = state.setUpgrades?.[setId] || {};
     const bonuses = Object.entries(setDef.thresholds).map(([threshold, stats]) => {
       const active = count >= Number(threshold);
       return `<div class="gear-set-threshold ${active ? 'active' : ''}">${active ? '✓' : '○'} ${threshold}p · ${Object.entries(stats).map(([stat, val]) => `+${val} ${stat}`).join(' · ')}</div>`;
     }).join('');
+    const upgradeLine = Object.keys(upgrades).length
+      ? `<div class="gear-set-threshold active">⬆ boss upgrade · ${Object.entries(upgrades).map(([stat, val]) => `+${val} ${stat}`).join(' · ')}</div>`
+      : '';
     return `
       <div class="gear-set-card ${count ? 'active' : ''}">
         <div class="gear-set-head">
           <div class="gear-set-name">${setDef.icon} ${setDef.name}</div>
           <div class="gear-set-count">${count} / 4</div>
         </div>
-        <div class="gear-set-bonuses">${bonuses}</div>
+        <div class="gear-set-bonuses">${bonuses}${upgradeLine}</div>
       </div>`;
   }).join('');
 
@@ -2911,7 +3115,8 @@ function renderGear() {
   }).join('');
 
   const owned = getOwnedEquipmentItems();
-  inventoryEl.innerHTML = owned.length ? owned.map(item => {
+  const arsenalItems = owned.filter(item => !isFlaskItem(item.id));
+  inventoryEl.innerHTML = arsenalItems.length ? arsenalItems.map(item => {
     const equipped = state.equippedGear?.[item.slot] === item.id;
     const bonuses = Object.entries(item.bonuses).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('');
     return `
@@ -2932,8 +3137,45 @@ function renderGear() {
       </div>`;
   }).join('') : '<div class="gear-empty-state">Nessun equip ottenuto. Le missioni speciali iniziano a comparire quando alzi le stat richieste.</div>';
 
+  const flaskItems = owned.filter(item => isFlaskItem(item.id));
+  consumablesEl.innerHTML = flaskItems.length ? flaskItems.map(item => {
+    const effect = FLASK_EFFECTS[item.id];
+    const cooldownRemaining = getFlaskCooldownRemaining(item.id);
+    const cooldownPct = effect.cooldownMs > 0 ? Math.max(0, Math.min(100, 100 - (cooldownRemaining / effect.cooldownMs) * 100)) : 100;
+    const ready = cooldownRemaining <= 0;
+    return `
+      <div class="gear-consumable-card ${ready ? 'ready' : 'cooldown'}">
+        <div class="gear-consumable-top">
+          <div class="gear-item-head">
+            <div class="gear-item-icon">${item.icon}</div>
+            <div>
+              <div class="gear-item-name">${item.name}</div>
+              <div class="gear-item-rarity ${getGearRarityClass(item.rarity)}">${item.rarity} · ${EQUIPMENT_SLOT_LABELS[item.slot]}</div>
+            </div>
+          </div>
+          <button class="btn ${ready ? '' : 'ghost'}" data-use-flask="${item.id}" ${ready ? '' : 'disabled'}>${ready ? 'Usa ora' : 'Cooldown'}</button>
+        </div>
+        <div class="gear-item-desc">${item.desc}</div>
+        <div class="gear-consumable-track"><span style="width:${cooldownPct}%"></span></div>
+        <div class="gear-consumable-meta">${effect.icon} ${effect.name} · ${ready ? 'READY' : `pronto tra ${formatTimeLeft(cooldownRemaining)}`}</div>
+      </div>`;
+  }).join('') : '<div class="gear-empty-state">Nessun flask trovato. Alcune special quest e alcuni boss possono sbloccarli.</div>';
+
   slotsEl.querySelectorAll('[data-unequip-slot]').forEach(btn => btn.addEventListener('click', () => unequipItem(btn.dataset.unequipSlot)));
   inventoryEl.querySelectorAll('[data-equip-item]').forEach(btn => btn.addEventListener('click', () => equipItem(btn.dataset.equipItem)));
+  consumablesEl.querySelectorAll('[data-use-flask]').forEach(btn => btn.addEventListener('click', () => useFlask(btn.dataset.useFlask)));
+
+  if (_gearCooldownInterval) clearInterval(_gearCooldownInterval);
+  if (currentScreen === 'gear' && flaskItems.some(item => getFlaskCooldownRemaining(item.id) > 0)) {
+    _gearCooldownInterval = setInterval(() => {
+      if (currentScreen !== 'gear') {
+        clearInterval(_gearCooldownInterval);
+        _gearCooldownInterval = null;
+        return;
+      }
+      renderGear();
+    }, 1000);
+  }
 }
 
 function completeWeeklyQuest(wq) {
@@ -3096,6 +3338,11 @@ function defeatBoss() {
   if (!state.bossesDefeated.includes(boss.id)) {
     state.bossesDefeated.push(boss.id);
   }
+
+  const bossDrop = rollLootTable(BOSS_DROP_TABLES[boss.id] || []);
+  if (bossDrop) awardEquipment(bossDrop);
+  const setUpgrade = BOSS_SET_UPGRADES[boss.id];
+  if (setUpgrade) grantSetUpgrade(setUpgrade.setId, setUpgrade.bonuses, boss.name);
   saveState();
 
   // Show rewards
@@ -3104,7 +3351,9 @@ function defeatBoss() {
     const eff = Math.floor(r.xp * 1.5 * (1+Math.min(state.currentStreak*0.05, 0.5)));
     return `${s?.icon||''} ${s?.name||r.stat}: +${eff} XP`;
   }).join('<br>');
-  $('defDetail').innerHTML = `${boss.icon} ${boss.name} SCONFITTO!<br><br>${rewLines}<br><br><strong>TOTALE: +${totalXP} XP</strong>`;
+  const bossDropLine = bossDrop ? `<br><br><strong>DROP:</strong> ${EQUIPMENT_CATALOG[bossDrop]?.icon || '✦'} ${EQUIPMENT_CATALOG[bossDrop]?.name || bossDrop}` : '';
+  const setUpgradeLine = setUpgrade ? `<br><strong>UPGRADE SET:</strong> ${EQUIPMENT_SET_BONUSES[setUpgrade.setId]?.name || setUpgrade.setId} · ${Object.entries(setUpgrade.bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}` : '';
+  $('defDetail').innerHTML = `${boss.icon} ${boss.name} SCONFITTO!<br><br>${rewLines}<br><br><strong>TOTALE: +${totalXP} XP</strong>${bossDropLine}${setUpgradeLine}`;
   $('bossDefeatOverlay').classList.remove('hidden');
   triggerGlitch();
   showToast(`☠ ${boss.name} SCONFITTO!`, 'levelup');
@@ -3607,7 +3856,7 @@ function renderAssessResult(input, ans, debuffs) {
 
 function showLevelUpOverlay() {
   const o = $('levelUpOverlay');
-  $('lvlDetail').innerHTML = `${getTitle()}<br>Livello Totale: ${getTotalLevel()}`;
+  $('lvlDetail').innerHTML = `${getTitle()}<br>Hunter Rank: ${getTotalLevel()}`;
   o.classList.remove('hidden');
 }
 
@@ -3632,6 +3881,7 @@ function init() {
   if (state.criticalHits == null) state.criticalHits = 0;
   if (!state.todayCompletedDetails) state.todayCompletedDetails = [];
   if (!state.customQuests)     state.customQuests = [];
+  if (state.onboardingRank == null) state.onboardingRank = 1;
   if (!state.ownedEquipment)   state.ownedEquipment = [];
   if (!state.equippedGear)     state.equippedGear = createEmptyGearSlots();
   state.ownedEquipment = [...new Set((state.ownedEquipment || []).map(itemId => LEGACY_EQUIPMENT_ID_MAP[itemId] || itemId))].filter(itemId => !!EQUIPMENT_CATALOG[itemId]);
@@ -3646,6 +3896,8 @@ function init() {
   }, createEmptyGearSlots());
   state.equippedGear = { ...createEmptyGearSlots(), ...state.equippedGear };
   if (!state.specialQuestCompleted) state.specialQuestCompleted = [];
+  if (!state.setUpgrades) state.setUpgrades = {};
+  if (!state.flaskCooldowns) state.flaskCooldowns = {};
 
   initStats();
   resetWeeklyIfNeeded();

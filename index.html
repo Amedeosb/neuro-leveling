@@ -66,7 +66,25 @@
         <div class="onb-logo">⚡</div>
         <h1 class="onb-title glitch-text" data-text="NEURO-LEVELING">NEURO-LEVELING</h1>
         <p class="onb-subtitle">SISTEMA DI AUTO-OTTIMIZZAZIONE</p>
-        <p class="onb-desc">Stai per entrare nel sistema. Una serie di assessment determinerà il tuo profilo iniziale, la tua classe e i tuoi punti base.</p>
+        <p class="onb-desc">Stai per entrare nel sistema. L'assessment iniziale crea la tua build di partenza, assegna la classe e ti porta fino a un massimo di Hunter Rank 20.</p>
+        <div class="onb-guide-grid">
+          <div class="onb-guide-card">
+            <div class="onb-guide-title">MISSIONE</div>
+            <p>NEURO-LEVELING trasforma biomarcatori, allenamento, studio e recovery in un loop da videogioco: scan, quest, drop, boss e build personale.</p>
+          </div>
+          <div class="onb-guide-card">
+            <div class="onb-guide-title">HUNTER RANK</div>
+            <p>È il livello globale dell'account. Parte dall'assessment iniziale e poi sale con quest e boss. Ora è il numero principale da leggere.</p>
+          </div>
+          <div class="onb-guide-card">
+            <div class="onb-guide-title">CLASS SYNC</div>
+            <p>Misura quanto le tue stat sono allineate alla classe scelta. Non è il tuo livello principale: indica solo la forza della tua specializzazione.</p>
+          </div>
+          <div class="onb-guide-card">
+            <div class="onb-guide-title">PROGRESSIONE</div>
+            <p>Assessment iniziale fino a Rank 20, poi il salto successivo arriva solo tramite quest, boss, equip, flask e set bonus.</p>
+          </div>
+        </div>
         <div class="onb-field">
           <label class="onb-label">IL TUO NOME</label>
           <input type="text" class="onb-input" id="onbName" placeholder="Hunter..." maxlength="20" autocomplete="off" required>
@@ -268,10 +286,11 @@
       <div class="screen-content">
         <div class="status-header">
           <div><h1 class="glitch-text player-name-lg" data-text="" id="playerNameLg"></h1><div class="player-class-badge" id="playerClassBadge"></div></div>
-          <div class="level-pill"><span class="lp-label">LV</span><span class="lp-value" id="totalLvPill">1</span></div>
+          <div class="level-pill"><span class="lp-label">RANK</span><span class="lp-value" id="totalLvPill">1</span></div>
         </div>
         <div class="player-title-bar" id="playerTitleBar">NEOPHYTE</div>
         <div class="xp-section"><div class="xp-bar-outer"><div class="xp-bar-fill" id="xpBarFill" style="width:0%"></div></div><div class="xp-text"><span id="xpCur">0</span> / <span id="xpNext">100</span> XP</div></div>
+        <div class="system-guide-card" id="systemGuideCard"></div>
         <div class="section-label">STATS PRINCIPALI</div>
         <div class="stats-list" id="statsPrimary"></div>
         <div class="section-label">STATS SECONDARIE</div>
@@ -320,6 +339,8 @@
         <div class="gear-slots-grid" id="gearSlotsGrid"></div>
         <div class="section-label">ARSENALE</div>
         <div class="gear-inventory-list" id="gearInventoryList"></div>
+        <div class="section-label">CONSUMABLES</div>
+        <div class="gear-consumables-list" id="gearConsumablesList"></div>
       </div>
     </section>
 
