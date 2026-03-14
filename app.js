@@ -3234,7 +3234,7 @@ function completeQuest(quest, mode, timeBonus) {
 }
 
 function getTotalGearPower() {
-  return Object.keys(STAT_META).reduce((sum, statId) => sum + getEquipmentBonusForStat(statId), 0);
+  return [...PRIMARY_STATS, ...SECONDARY_STATS].reduce((sum, stat) => sum + getEquipmentBonusForStat(stat.id), 0);
 }
 
 function getGearRarityClass(rarity) {
