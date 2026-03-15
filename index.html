@@ -306,42 +306,47 @@
     <!-- STATUS -->
     <section class="screen active" id="screenStatus">
       <div class="screen-content">
+        <h1 class="screen-title glitch-text" data-text="DAILY COMMAND">DAILY COMMAND</h1>
+        <p class="screen-sub">Centro operativo del giorno: scan, prossima missione, stato attivo e rischi immediati.</p>
+        <section class="today-command" id="todayCommand" aria-label="Today Command"></section>
+        <section class="start-here-module" id="startHereModule" aria-label="Start Here"></section>
         <div class="status-header">
           <div><h1 class="glitch-text player-name-lg" data-text="" id="playerNameLg"></h1><div class="player-class-badge" id="playerClassBadge"></div></div>
           <div class="level-pill"><span class="lp-label">RANK</span><span class="lp-value" id="totalLvPill">1</span></div>
         </div>
         <div class="player-title-bar" id="playerTitleBar">NEOPHYTE</div>
         <div class="xp-section"><div class="xp-bar-outer"><div class="xp-bar-fill" id="xpBarFill" style="width:0%"></div></div><div class="xp-text"><span id="xpCur">0</span> / <span id="xpNext">100</span> XP</div></div>
-        <div class="system-guide-card" id="systemGuideCard"></div>
-        <div class="section-label">STATS PRINCIPALI</div>
-        <div class="stats-list" id="statsPrimary"></div>
-        <div class="section-label">STATS SECONDARIE</div>
-        <div class="stats-list" id="statsSecondary"></div>
-        <div class="section-label">DEBUFF ATTIVI</div>
+        <div id="progressLayersBlock" class="progress-layers-block"></div>
+        <div class="section-label">LIVE CONDITIONS</div>
         <div class="debuffs-list" id="debuffsList"><div class="debuff-card ok">◈ SISTEMA STABILE</div></div>
-        <div class="mini-grid">
-          <div class="mg"><div class="mg-v" id="streakV">0</div><div class="mg-l">STREAK</div></div>
-          <div class="mg"><div class="mg-v" id="totalXpV">0</div><div class="mg-l">XP TOT</div></div>
-          <div class="mg"><div class="mg-v" id="questsDoneV">0</div><div class="mg-l">QUEST</div></div>
-          <div class="mg"><div class="mg-v" id="bossKillsV">0</div><div class="mg-l">BOSS☠</div></div>
-        </div>
-        <div class="section-label">BUFF ATTIVI</div>
+        <div class="section-label">ACTIVE EFFECTS</div>
         <div id="statusBuffs" class="status-buffs"></div>
-        <div class="section-label">FAZIONI</div>
-        <div id="statusFactions" class="status-factions"></div>
-        <div class="section-label">ACHIEVEMENT</div>
-        <div id="statusAchievements" class="status-achievements"></div>
       </div>
     </section>
 
     <section class="screen" id="screenProfile">
       <div class="screen-content">
         <h1 class="screen-title glitch-text" data-text="HUNTER PROFILE">HUNTER PROFILE</h1>
-        <p class="screen-sub">Titoli attivi, identità della build e targeting dinamico su quest e boss.</p>
+        <p class="screen-sub">Identità del personaggio, build reale, titoli attivi, allineamento e targeting della progressione.</p>
         <div id="profileSummary"></div>
-        <div class="section-label">TITOLI SBLOCCATI</div>
+        <div class="section-label">BUILD MATRIX</div>
+        <div class="profile-build-grid">
+          <div class="profile-build-column">
+            <div class="profile-build-kicker">CORE STATS</div>
+            <div class="stats-list" id="profileStatsPrimary"></div>
+          </div>
+          <div class="profile-build-column">
+            <div class="profile-build-kicker">SUPPORT STATS</div>
+            <div class="stats-list" id="profileStatsSecondary"></div>
+          </div>
+        </div>
+        <div class="section-label">TITLE LOADOUT</div>
         <div class="profile-title-grid" id="profileTitleGrid"></div>
-        <div class="section-label">TARGETING DEL SISTEMA</div>
+        <div class="section-label">FACTION ALIGNMENT</div>
+        <div id="profileFactions" class="status-factions"></div>
+        <div class="section-label">ACHIEVEMENT CABINET</div>
+        <div id="profileAchievements" class="status-achievements"></div>
+        <div class="section-label">TARGETING MATRIX</div>
         <div class="profile-recommendations" id="profileRecommendations"></div>
       </div>
     </section>
@@ -349,12 +354,12 @@
     <section class="screen" id="screenCodex">
       <div class="screen-content">
         <h1 class="screen-title glitch-text" data-text="SYSTEM CODEX">SYSTEM CODEX</h1>
-        <p class="screen-sub">Manuale del sistema: rank, stat, boss, loot table e bonus set.</p>
+        <p class="screen-sub">Regole del mondo, sistemi e formule in linguaggio chiaro. Qui trovi come funziona NEURO-LEVELING, non il tuo stato attuale.</p>
         <div class="codex-tabs" id="codexTabs"></div>
         <div class="codex-content" id="codexContent">
           <div class="codex-card">
             <div class="codex-card-title">BOOTING CODEX</div>
-            <div class="codex-card-copy">Il sistema sta caricando le guide operative. Se resti su questa schermata, il Codex verrà popolato con regole di Rank, missioni, boss, loot e set bonus.</div>
+            <div class="codex-card-copy">Il sistema sta caricando le regole operative. Se resti su questa schermata, il Codex verrà popolato con struttura di rank, stat, boss, loot, set e legacy.</div>
           </div>
         </div>
       </div>
@@ -382,6 +387,9 @@
           <div class="gear-power-value" id="gearPowerValue">+0</div>
           <div class="gear-power-desc" id="gearPowerDesc">Nessun bonus attivo</div>
         </div>
+        <div class="section-label">NEXT UNLOCK PREVIEW</div>
+        <div class="gear-unlock-feature" id="gearUnlockFeature"></div>
+        <div class="gear-unlock-preview-list" id="gearUnlockPreviewList"></div>
         <div class="gear-blueprint-list" id="gearBlueprintList"></div>
         <div class="gear-set-list" id="gearSetList"></div>
         <div class="section-label">MATERIALS</div>
@@ -417,10 +425,14 @@
           <div class="boss-fight-emotion" id="bossFightEmotion">EMOTIONAL SIGNATURE</div>
           <div class="boss-fight-lore" id="bossFightLore"></div>
           <div class="boss-fight-quote" id="bossFightQuote"></div>
-          <div class="protocol-lbl">PROTOCOLLO: <span id="protocolLbl">—</span></div>
-          <div class="timer-wrap"><svg viewBox="0 0 120 120" class="timer-svg"><circle cx="60" cy="60" r="54" class="timer-track"/><circle cx="60" cy="60" r="54" class="timer-progress" id="timerProg"/></svg><div class="timer-val" id="timerVal">00:00</div></div>
-          <div class="protocol-instr" id="protocolInstr">Premi ESEGUI per iniziare.</div>
-          <div class="fight-btns"><button class="btn-primary" id="btnExec">ESEGUI STEP</button><button class="btn-danger" id="btnRetreat">RITIRATA</button></div>
+          <div class="boss-campaign-banner hidden" id="bossCampaignBanner"></div>
+          <div class="boss-protocol-grid" id="bossProtocolSections"></div>
+          <div class="boss-execution-box">
+            <div class="protocol-lbl">LIVE EXECUTION: <span id="protocolLbl">—</span></div>
+            <div class="timer-wrap"><svg viewBox="0 0 120 120" class="timer-svg"><circle cx="60" cy="60" r="54" class="timer-track"/><circle cx="60" cy="60" r="54" class="timer-progress" id="timerProg"/></svg><div class="timer-val" id="timerVal">00:00</div></div>
+            <div class="protocol-instr" id="protocolInstr">Premi ESEGUI per iniziare.</div>
+            <div class="fight-btns"><button class="btn-primary" id="btnExec">ESEGUI STEP</button><button class="btn-danger" id="btnRetreat">RITIRATA</button></div>
+          </div>
         </div>
       </div>
     </section>
@@ -429,7 +441,9 @@
     <section class="screen" id="screenCompanion">
       <div class="screen-content companion-screen">
         <div class="companion-hdr"><div class="companion-avatar">👁</div><div><div class="companion-name">SHADOW GUIDE</div><div class="companion-role">Consulente Neuro-Tattico</div></div><button class="ai-config-btn" id="btnAiConfig" title="Configura AI">⚙</button></div>
-        <div class="chat-messages" id="chatMsgs"><div class="chat-msg bot">Benvenuto, Hunter. Sono il tuo Shadow Guide. Chiedimi qualsiasi cosa.</div></div>
+        <div class="guide-context-panel" id="guideContextPanel"></div>
+        <div class="guide-prompt-row" id="guidePromptRow"></div>
+        <div class="chat-messages" id="chatMsgs"><div class="chat-msg bot">Benvenuto, Hunter. Io non sono il Codex: ti aiuto a leggere il momento, scegliere la prossima mossa e trasformare il sistema in azione.</div></div>
         <div class="chat-bar"><input type="text" class="chat-input" id="chatInput" placeholder="Scrivi..." autocomplete="off"><button class="chat-send" id="chatSend">→</button></div>
       </div>
     </section>
@@ -440,15 +454,60 @@
         <h1 class="screen-title glitch-text" data-text="ASSESSMENT">ASSESSMENT</h1>
         <p class="screen-sub">Valutazione biometrica giornaliera</p>
         <div id="assessForm">
-          <div class="af"><label class="af-lbl">HRV <span class="af-u">(ms)</span></label><div class="af-row"><input type="range" class="af-slider" id="inHrv" min="10" max="200" value="60"><span class="af-val" id="vHrv">60</span></div></div>
-          <div class="af"><label class="af-lbl">BOLT <span class="af-u">(sec)</span></label><div class="af-row"><input type="range" class="af-slider" id="inBolt" min="3" max="80" value="20"><span class="af-val" id="vBolt">20</span></div></div>
-          <div class="af"><label class="af-lbl">MOOD <span class="af-u">/10</span></label><div class="af-row"><input type="range" class="af-slider" id="inMood" min="1" max="10" value="5"><span class="af-val" id="vMood">5</span></div></div>
-          <div class="af"><label class="af-lbl">ENERGY <span class="af-u">/10</span></label><div class="af-row"><input type="range" class="af-slider" id="inEnergy" min="1" max="10" value="5"><span class="af-val" id="vEnergy">5</span></div></div>
-          <div class="af"><label class="af-lbl">SLEEP <span class="af-u">/10</span></label><div class="af-row"><input type="range" class="af-slider" id="inSleep" min="1" max="10" value="5"><span class="af-val" id="vSleep">5</span></div></div>
+          <div class="assess-intro-card">
+            <div class="assess-intro-kicker">DAILY SCAN</div>
+            <p class="assess-intro-copy">Inserisci come sta rispondendo oggi il tuo sistema. Il motore usa questi segnali per suggerire missione e intensità con logica adattiva, ma con linguaggio semplice.</p>
+          </div>
+          <div class="af">
+            <div class="af-head">
+              <label class="af-lbl" for="inHrv">HRV <span class="af-u">(ms)</span></label>
+              <button class="af-info-btn" type="button" data-metric-info="hrv" aria-label="Spiega HRV" aria-expanded="false">i</button>
+            </div>
+            <p class="af-help">Ti dice quanto il tuo sistema sembra pronto a gestire carico e recupero oggi.</p>
+            <div class="af-tooltip hidden" id="metricInfoHrv">HRV significa variabilità tra un battito e l'altro. Qui la leggiamo come segnale di flessibilità e recupero, non come diagnosi medica.</div>
+            <div class="af-row"><input type="range" class="af-slider" id="inHrv" min="10" max="200" value="60"><span class="af-val" id="vHrv">60</span></div>
+          </div>
+          <div class="af">
+            <div class="af-head">
+              <label class="af-lbl" for="inBolt">BOLT <span class="af-u">(sec)</span></label>
+              <button class="af-info-btn" type="button" data-metric-info="bolt" aria-label="Spiega BOLT" aria-expanded="false">i</button>
+            </div>
+            <p class="af-help">Indica quanto bene tolleri la CO2 e quanto il respiro resta stabile sotto pressione.</p>
+            <div class="af-tooltip hidden" id="metricInfoBolt">BOLT è il tempo di apnea confortevole dopo un'espirazione normale. In questa app aiuta a stimare stabilità respiratoria e controllo.</div>
+            <div class="af-row"><input type="range" class="af-slider" id="inBolt" min="3" max="80" value="20"><span class="af-val" id="vBolt">20</span></div>
+          </div>
+          <div class="af">
+            <div class="af-head">
+              <label class="af-lbl" for="inMood">MOOD <span class="af-u">/10</span></label>
+              <button class="af-info-btn" type="button" data-metric-info="mood" aria-label="Spiega mood" aria-expanded="false">i</button>
+            </div>
+            <p class="af-help">Serve a capire quanto attrito emotivo potresti sentire quando inizi una missione.</p>
+            <div class="af-tooltip hidden" id="metricInfoMood">Mood non misura quanto vali oggi. Serve solo a capire se il sistema deve proporre una missione più lineare, breve o più sfidante.</div>
+            <div class="af-row"><input type="range" class="af-slider" id="inMood" min="1" max="10" value="5"><span class="af-val" id="vMood">5</span></div>
+          </div>
+          <div class="af">
+            <div class="af-head">
+              <label class="af-lbl" for="inEnergy">ENERGY <span class="af-u">/10</span></label>
+              <button class="af-info-btn" type="button" data-metric-info="energy" aria-label="Spiega energy" aria-expanded="false">i</button>
+            </div>
+            <p class="af-help">Misura quanta spinta reale senti per partire, non quanta motivazione vorresti avere.</p>
+            <div class="af-tooltip hidden" id="metricInfoEnergy">Energy serve a dosare intensità e durata. Se è bassa, il sistema tende a scegliere missioni più chiudibili e meno costose.</div>
+            <div class="af-row"><input type="range" class="af-slider" id="inEnergy" min="1" max="10" value="5"><span class="af-val" id="vEnergy">5</span></div>
+          </div>
+          <div class="af">
+            <div class="af-head">
+              <label class="af-lbl" for="inSleep">SLEEP <span class="af-u">/10</span></label>
+              <button class="af-info-btn" type="button" data-metric-info="sleep" aria-label="Spiega sleep" aria-expanded="false">i</button>
+            </div>
+            <p class="af-help">Aiuta il sistema a capire se oggi puoi spingere oppure se serve più margine di recupero.</p>
+            <div class="af-tooltip hidden" id="metricInfoSleep">Sleep è una stima della qualità del recupero recente. Non serve precisione clinica: basta una valutazione onesta del tuo stato.</div>
+            <div class="af-row"><input type="range" class="af-slider" id="inSleep" min="1" max="10" value="5"><span class="af-val" id="vSleep">5</span></div>
+          </div>
           <button class="btn-primary full-w" id="btnAssess">ANALIZZA ⚡</button>
         </div>
         <div class="assess-result hidden" id="assessResult">
           <div class="ans-badge" id="ansBadge">EQUILIBRATO</div>
+          <div class="assess-summary-card" id="assessSummaryCard"></div>
           <div class="assess-metrics" id="assessMetrics"></div>
           <div class="rest-alert hidden" id="restAlert">⚠ FORCED REST DAY</div>
           <div class="assess-debuffs" id="assessDebuffs"></div>

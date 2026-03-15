@@ -11,17 +11,30 @@ let _saveTimeout = null;
 let _googleLoginPending = false;
 const STORAGE_KEY = 'neuro_leveling_v2';
 let currentScreen = 'status';
+let lastGuideContextScreen = 'status';
+let startHerePreviewDay = null;
 let _systemPopupInterval = null;
 let _lastSystemPopupAt = 0;
 let _systemAudioContext = null;
 let _systemAudioUnlocked = false;
 let _gearCooldownInterval = null;
+let pendingQuestBoardFocus = null;
 const SYSTEM_POPUPS_ENABLED = false;
 const _domReadyPromise = document.readyState === 'loading'
   ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
   : Promise.resolve();
 
 function $(id) { return document.getElementById(id); }
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char]);
+}
 
 function syncAppChromeMetrics() {
   const root = document.documentElement;
@@ -295,6 +308,9 @@ function normalizeState(snapshot) {
     equipmentUpgrades: snapshot?.equipmentUpgrades && typeof snapshot.equipmentUpgrades === 'object' ? snapshot.equipmentUpgrades : base.equipmentUpgrades,
     materials: snapshot?.materials && typeof snapshot.materials === 'object' ? snapshot.materials : base.materials,
     flaskState: snapshot?.flaskState && typeof snapshot.flaskState === 'object' ? snapshot.flaskState : base.flaskState,
+    startHere: snapshot?.startHere && typeof snapshot.startHere === 'object'
+      ? { ...base.startHere, ...snapshot.startHere }
+      : base.startHere,
   };
 }
 
@@ -903,6 +919,258 @@ const BOSS_DEFINITIONS = [
     rewards:[{stat:'ADA',xp:155},{stat:'WIL',xp:110},{stat:'INT',xp:90}],
   },
 ];
+
+const BOSS_ACTION_FRAMEWORK = {
+  ANXIETY_WRAITH: {
+    trigger: 'Si attiva quando interpreti l’attivazione fisica come pericolo imminente e inizi a inseguire scenari peggiori del reale.',
+    signs: {
+      body: ['Tensione al petto o gola', 'Respiro corto e alto', 'Urgenza di scappare o controllare tutto'],
+      thoughts: ['"Sta per succedere qualcosa"', '"Devo calmarmi subito o crollo"', '"Se sento questo, significa pericolo"'],
+      behavior: ['Controlli ripetuti', 'Evitamento preventivo', 'Richiesta continua di rassicurazione'],
+    },
+    fastProtocol: ['Allunga subito l’espirazione.', 'Aggancia 5 dettagli reali nell’ambiente.', 'Nomina l’attivazione senza chiamarla minaccia.'],
+    extendedProtocolIntro: 'Esegui il protocollo completo per frenare il loop allarme → interpretazione → escalation.',
+    victoryCondition: 'Completa tutti gli step senza interrompere il ritmo e chiudi con respiro più lento, spalle più basse e ritorno a una decisione concreta.',
+    factionId: 'NEURAL',
+    repGain: 18,
+  },
+  LETHARGY_GOLEM: {
+    trigger: 'Si attiva quando energia bassa, inerzia e assenza di slancio ti fanno trattare l’immobilità come stato normale.',
+    signs: {
+      body: ['Pesantezza diffusa', 'Lentezza motoria', 'Voglia di stare fermo anche dopo il riposo'],
+      thoughts: ['"Lo faccio dopo"', '"Non ho abbastanza energia per partire"', '"Prima devo sentirmi pronto"'],
+      behavior: ['Ritardo dell’inizio', 'Scroll passivo', 'Accumulo di compiti piccoli mai avviati'],
+    },
+    fastProtocol: ['Attiva il corpo con uno shock breve.', 'Fai un micro-set di movimento senza pensarci.', 'Lancia un task da 2 minuti immediatamente.'],
+    extendedProtocolIntro: 'Il protocollo esteso serve a riaccendere output e attenzione senza aspettare motivazione spontanea.',
+    victoryCondition: 'Passi da immobilità a movimento reale e completi almeno una micro-azione operativa nello stesso ciclo.',
+    factionId: 'PHYSIQUE',
+    repGain: 20,
+  },
+  PROCRASTINATION_LEECH: {
+    trigger: 'Si attiva quando il task ha attrito iniziale alto e il sistema cerca gratificazione immediata invece di ingresso rapido.',
+    signs: {
+      body: ['Agitazione bassa ma costante', 'Stanchezza selettiva solo verso il task', 'Picchi di tensione appena provi a iniziare'],
+      thoughts: ['"Prima sistemo altro"', '"Mi serve il mood giusto"', '"Inizio dopo un’altra cosa veloce"'],
+      behavior: ['Task switching', 'Preparazione infinita', 'Distrazioni progettate per sembrare utili'],
+    },
+    fastProtocol: ['Riduci il task a 2 minuti.', 'Taglia tre distrazioni fisiche.', 'Comunica a qualcuno cosa inizi adesso.'],
+    extendedProtocolIntro: 'Questo boss cade quando abbassi l’attrito iniziale e rendi pubblica la direzione del task.',
+    victoryCondition: 'Entri davvero nel compito evitato, superi il primo minuto e lasci una prova concreta di avanzamento.',
+    factionId: 'COGNITIVE',
+    repGain: 22,
+  },
+  ANGER_BERSERKER: {
+    trigger: 'Si attiva quando frustrazione, minaccia o percezione di ingiustizia spingono l’energia verso scarica impulsiva.',
+    signs: {
+      body: ['Calore, mandibola dura, pugni tesi', 'Accelerazione improvvisa del respiro', 'Impulso a muoverti o parlare troppo forte'],
+      thoughts: ['"Devo reagire subito"', '"Non posso lasciar correre"', '"Se non esplodo, perdo"'],
+      behavior: ['Messaggi impulsivi', 'Tono aggressivo', 'Escalation relazionale rapida'],
+    },
+    fastProtocol: ['Scarica CO2 con sigh controllati.', 'Sposta il punto di vista in terza persona.', 'Ritarda qualsiasi risposta offensiva.'],
+    extendedProtocolIntro: 'Il protocollo esteso converte impulso in controllo e ti fa tornare da reazione a strategia.',
+    victoryCondition: 'Rallenti il corpo, abbassi il tono della risposta e trasformi la scarica in un’azione disciplinata invece che distruttiva.',
+    factionId: 'SOCIAL',
+    repGain: 26,
+  },
+  DESPAIR_PHANTOM: {
+    trigger: 'Si attiva quando il sistema perde senso, l’azione sembra inutile e ogni sforzo viene percepito come vuoto.',
+    signs: {
+      body: ['Peso generalizzato', 'Postura chiusa', 'Riduzione netta della spinta motoria'],
+      thoughts: ['"Non serve a niente"', '"Tanto non cambia nulla"', '"Non ho motivo per muovermi"'],
+      behavior: ['Ritiro', 'Blocco delle iniziative', 'Taglio del contatto umano e dei rituali base'],
+    },
+    fastProtocol: ['Muovi il corpo all’aperto.', 'Riattacca a un valore concreto.', 'Cerca una connessione umana immediata.'],
+    extendedProtocolIntro: 'Qui non cerchi ispirazione: ripristini ritmo, valore e contatto finché il vuoto perde dominio.',
+    victoryCondition: 'Completi il protocollo e chiudi con un atto reale di movimento, contatto o senso che rompe la paralisi.',
+    factionId: 'NEURAL',
+    repGain: 30,
+  },
+  SHAME_SIREN: {
+    trigger: 'Si attiva quando rischio di esposizione, giudizio o imperfezione ti spinge a sparire prima di essere visto davvero.',
+    signs: {
+      body: ['Postura che collassa', 'Sguardo evitante', 'Nodo allo stomaco o al volto'],
+      thoughts: ['"Farò una figuraccia"', '"Meglio non farmi notare"', '"Se mostro questo, perdo valore"'],
+      behavior: ['Auto-censura', 'Silenzio difensivo', 'Ritiro poco prima dell’azione sociale'],
+    },
+    fastProtocol: ['Riapri la postura.', 'Dì una verità breve ad alta voce.', 'Fai una micro-esposizione subito.'],
+    extendedProtocolIntro: 'Questo protocollo allena visibilità tollerabile: non perfetta, ma abbastanza reale da rompere la vergogna.',
+    victoryCondition: 'Ti esponi in modo misurabile senza ritirarti e chiudi il loop con un’azione visibile, inviata o pubblicata.',
+    factionId: 'SOCIAL',
+    repGain: 32,
+  },
+  PANIC_HYDRA: {
+    trigger: 'Si attiva quando la velocità interna supera il controllo e ogni picco di attivazione genera nuova catastrofe mentale.',
+    signs: {
+      body: ['Picco di battito e respiro', 'Vertigine o tremore', 'Sensazione di perdita di controllo imminente'],
+      thoughts: ['"Sto per esplodere"', '"Peggiora troppo in fretta"', '"Devo fermarlo subito"'],
+      behavior: ['Iper-monitoraggio', 'Fuga', 'Tentativi caotici di spegnere tutto'],
+    },
+    fastProtocol: ['Rallenta il respiro con espirazioni a scalare.', 'Ancora attenzione a un punto preciso.', 'Cammina lento invece di combattere la scarica.'],
+    extendedProtocolIntro: 'L’Idra perde potere quando scegli ritmo e precisione invece di velocità e lotta interna.',
+    victoryCondition: 'Porti il corpo fuori dal picco senza accelerare, completi tutti gli step e torni a un ritmo sostenibile.',
+    factionId: 'NEURAL',
+    repGain: 34,
+  },
+  ISOLATION_WEAVER: {
+    trigger: 'Si attiva quando vulnerabilità o fatica ti convincono che contattare qualcuno sia più pericoloso che restare solo.',
+    signs: {
+      body: ['Chiusura del petto', 'Svuotamento della voce', 'Energia sociale che crolla in anticipo'],
+      thoughts: ['"Meglio non disturbare"', '"Nessuno capirebbe davvero"', '"È più sicuro stare offline"'],
+      behavior: ['Ghosting', 'Risposte minime', 'Evitamento di contatto autentico'],
+    },
+    fastProtocol: ['Nomina tre persone sicure.', 'Manda un messaggio reale, non logistico.', 'Scegli la voce invece del solo testo.'],
+    extendedProtocolIntro: 'Questo protocollo ricostruisce connessione come atto tattico, non come dipendenza o debolezza.',
+    victoryCondition: 'Crei contatto autentico e resti presente abbastanza a lungo da interrompere l’isolamento difensivo.',
+    factionId: 'SOCIAL',
+    repGain: 36,
+  },
+  PERFECTION_JUDGE: {
+    trigger: 'Si attiva quando il compito richiede output visibile e il controllo totale diventa più importante della chiusura reale.',
+    signs: {
+      body: ['Tensione fine e rigida', 'Fatica mentale da revisione continua', 'Blocco davanti alla consegna'],
+      thoughts: ['"Non è ancora pronto"', '"Serve un altro giro"', '"Se non è perfetto, non vale"'],
+      behavior: ['Revisione infinita', 'Mancata consegna', 'Bozze che non lasciano mai il desktop'],
+    },
+    fastProtocol: ['Produci una brutta prima versione.', 'Imponi un solo passaggio di revisione.', 'Consegna o chiudi il task appena è sufficiente.'],
+    extendedProtocolIntro: 'Il Giudice cade quando sostituisci perfezione con completamento misurabile e ritmi di rilascio reali.',
+    victoryCondition: 'Chiudi e spedisci una versione utilizzabile senza riaprire il task per perfezionismo compulsivo.',
+    factionId: 'COGNITIVE',
+    repGain: 38,
+  },
+  ENVY_CHIMERA: {
+    trigger: 'Si attiva quando il confronto con le build altrui ti disallinea dal tuo asse e trasforma ispirazione in perdita di identità.',
+    signs: {
+      body: ['Attivazione dispersa', 'Irrequietezza dopo social o ranking', 'Fatica a restare nel tuo compito'],
+      thoughts: ['"Loro sono più avanti"', '"Sto sbagliando strada"', '"Forse dovrei cambiare tutto"'],
+      behavior: ['Doom-scrolling comparativo', 'Cambio piano continuo', 'Abbandono della tua road map'],
+    },
+    fastProtocol: ['Taglia feed e ranking per una finestra breve.', 'Scrivi tre metriche solo tue.', 'Converti il confronto in una singola azione sul tuo path.'],
+    extendedProtocolIntro: 'La Chimera muore quando il confronto smette di guidare il timone e torna a nutrire solo decisioni utili.',
+    victoryCondition: 'Rientri nella tua build, definisci metriche interne e completi un passo concreto sul tuo percorso nello stesso blocco.',
+    factionId: 'COGNITIVE',
+    repGain: 40,
+  },
+};
+
+const BOSS_CAMPAIGN_EFFECTS = {
+  ANXIETY_WRAITH: [
+    {
+      targetId: 'PANIC_HYDRA',
+      type: 'weakness',
+      title: 'Weakness Revealed',
+      summary: 'L’Idra perde potere quando accetti il picco iniziale invece di inseguire lo spegnimento immediato.',
+      why: 'Dopo aver spezzato Anxiety Wraith riconosci piu in fretta il falso allarme che alimenta il panico.',
+      weaknessReveal: 'Non va domata con velocita: si apre quando rallenti l’espirazione e smetti di trattare il picco come prova di collasso.',
+      damageBonus: 0.12,
+    },
+    {
+      targetId: 'SHAME_SIREN',
+      type: 'protocol',
+      title: 'Alternative Protocol Step',
+      summary: 'Si sblocca un ingresso piu rapido basato su naming e reality check invece che solo esposizione diretta.',
+      why: 'Aver vinto contro l’ansia ti insegna a distinguere attivazione da giudizio reale.',
+      protocolStep: {
+        insertAfter: 1,
+        label: 'Signal Naming',
+        instr: 'Nomina ad alta voce il segnale fisico e separalo dal giudizio: "Sto sentendo attivazione, non una sentenza sul mio valore".',
+        dur: 75,
+      },
+      fastProtocolAdd: 'Nomina il segnale prima di interpretarlo come condanna.',
+    },
+  ],
+  LETHARGY_GOLEM: [
+    {
+      targetId: 'DESPAIR_PHANTOM',
+      type: 'advantage',
+      title: 'Tactical Advantage',
+      summary: 'Entri nello scontro con un prime motorio gia attivo.',
+      why: 'Il Golem della Letargia ti insegna a forzare il primo movimento anche quando il sistema vuole collassare.',
+      advantage: 'Apertura piu facile: i timer del protocollo si accorciano e il primo passo costa meno attrito.',
+      durationMult: 0.88,
+      bonusRewards: [{ materialId: 'BOSS_CORE', amount: 1 }],
+    },
+  ],
+  PROCRASTINATION_LEECH: [
+    {
+      targetId: 'PERFECTION_JUDGE',
+      type: 'protocol',
+      title: 'Alternative Protocol Step',
+      summary: 'Sblocchi una branch che forza la consegna di un frammento prima della revisione.',
+      why: 'Aver rotto la procrastinazione rende piu facile entrare nel loop "ship first, refine later".',
+      protocolStep: {
+        insertAfter: 0,
+        label: 'First Fragment',
+        instr: 'Pubblica o invia un frammento incompleto entro 90 secondi prima di qualsiasi rifinitura.',
+        dur: 90,
+      },
+      advantage: 'Riduce l’attrito iniziale del fight e accelera l’ingresso nella consegna.',
+      damageBonus: 0.14,
+    },
+  ],
+  ANGER_BERSERKER: [
+    {
+      targetId: 'ISOLATION_WEAVER',
+      type: 'weakness',
+      title: 'Weakness Revealed',
+      summary: 'Il Tessitore si incrina quando rallenti abbastanza da non usare il ritiro come autodifesa aggressiva.',
+      why: 'Controllare la rabbia rende visibile la differenza tra proteggerti e tagliare il contatto.',
+      weaknessReveal: 'La sua debolezza e la presenza regolata: voce bassa, contatto breve ma vero, zero multitasking difensivo.',
+      durationMult: 0.92,
+    },
+  ],
+  DESPAIR_PHANTOM: [
+    {
+      targetId: 'ISOLATION_WEAVER',
+      type: 'reward',
+      title: 'Campaign Reward Cache',
+      summary: 'Le prossime vittorie contro l’isolamento rilasciano materiali extra e piu contesto tattico.',
+      why: 'Quando rompi la disperazione, i fight sociali smettono di sembrare puro rischio e iniziano a dare ritorni migliori.',
+      bonusRewards: [{ materialId: 'BOSS_CORE', amount: 1 }],
+      rewardUnlock: 'Cache di campagna: +1 BOSS CORE al clear.',
+    },
+  ],
+  SHAME_SIREN: [
+    {
+      targetId: 'ENVY_CHIMERA',
+      type: 'weakness',
+      title: 'Weakness Revealed',
+      summary: 'La Chimera perde presa se arrivi con identita dichiarata invece che in cerca di validazione esterna.',
+      why: 'Dopo la Siren della Vergogna ti esponi con piu stabilita e il confronto perde veleno.',
+      weaknessReveal: 'Va colpita con metriche interne, non con ranking esterni.',
+      damageBonus: 0.1,
+      rewardUnlock: 'Frammento identitario: chance bonus di materiale al clear.',
+      bonusRewards: [{ materialId: 'BOSS_CORE', amount: 1 }],
+    },
+  ],
+  PANIC_HYDRA: [
+    {
+      targetId: 'ENVY_CHIMERA',
+      type: 'advantage',
+      title: 'Tactical Advantage',
+      summary: 'Con piu controllo del ritmo interno, il confronto non riesce piu a trascinarti fuori asse cosi facilmente.',
+      why: 'Dopo Panic Hydra hai piu margine per restare sul tuo ritmo invece di reagire alla velocita altrui.',
+      advantage: 'Riduzione difficolta: il danno inflitto per step aumenta e il fight diventa piu lineare.',
+      damageBonus: 0.12,
+    },
+  ],
+  ISOLATION_WEAVER: [
+    {
+      targetId: 'ENVY_CHIMERA',
+      type: 'protocol',
+      title: 'Alternative Protocol Step',
+      summary: 'Sblocchi un passo di reality anchoring con una voce alleata o una nota audio a te stesso.',
+      why: 'Quando riapri il canale sociale, il confronto smette di essere un monologo tossico.',
+      protocolStep: {
+        insertAfter: 2,
+        label: 'Ally Anchor',
+        instr: 'Invia o riascolta una nota vocale di 30-60 secondi che ti riporta alla tua road map reale.',
+        dur: 60,
+      },
+      fastProtocolAdd: 'Richiama una voce alleata prima di riaprire feed e ranking.',
+    },
+  ],
+};
 
 // ========================
 // WEEKLY QUESTS
@@ -1635,6 +1903,13 @@ const DEFAULT_STATE = {
   profileFears: '',
   bossTitles: [],
   activeBossTitle: null,
+  startHere: {
+    startedAt: null,
+    basicsReviewed: false,
+    adaptiveReviewed: false,
+    weeklyRecapReviewed: false,
+    buildPath: null,
+  },
 };
 
 let state = loadState(); // Carica subito da localStorage
@@ -1855,6 +2130,841 @@ function getProfileRecommendations() {
   };
 }
 
+function getLatestAssessment() {
+  return state.assessmentHistory[state.assessmentHistory.length - 1] || null;
+}
+
+function hasTodayAssessment() {
+  return state.lastAssessmentDate === new Date().toDateString() && !!getLatestAssessment();
+}
+
+function getFactionDefinition(cat) {
+  return FACTION_DEFINITIONS.find(faction => faction.id === cat) || null;
+}
+
+function getTotalFactionRepValue() {
+  return Object.values(state.factionRep || {}).reduce((sum, value) => sum + (value || 0), 0);
+}
+
+function getLeadFactionProgress() {
+  const entries = FACTION_DEFINITIONS.map(faction => ({
+    faction,
+    rep: state.factionRep?.[faction.id] ?? 0,
+  })).sort((left, right) => right.rep - left.rep);
+  return entries[0] || null;
+}
+
+function renderProgressLayers() {
+  const root = $('progressLayersBlock');
+  if (!root) return;
+
+  const classDef = CLASS_DEFINITIONS.find(c => c.id === state.playerClass) || null;
+  const rankInfo = getHunterRankInfo();
+  const startingRank = Math.max(1, Math.min(20, state.onboardingRank || 1));
+  const earnedRankGain = Math.max(0, rankInfo.rank - startingRank);
+  const topPrimary = [...PRIMARY_STATS]
+    .sort((left, right) => getEffectiveStatLv(right.id) - getEffectiveStatLv(left.id))
+    .slice(0, 2);
+  const totalFactionRep = getTotalFactionRepValue();
+  const leadFaction = getLeadFactionProgress();
+  const gearCount = getOwnedEquipmentItems().length;
+  const hasEarnedProgress = (state.questsCompleted || 0) > 0
+    || state.bossesDefeated.length > 0
+    || (state.totalXP || 0) > 0
+    || state.currentStreak > 0
+    || totalFactionRep > 0
+    || gearCount > 0;
+
+  root.innerHTML = `
+    <section class="progress-layers-shell" aria-label="Progression layers">
+      <div class="progress-layers-head">
+        <div>
+          <div class="progress-layers-kicker">PROGRESSION READOUT</div>
+          <h2 class="progress-layers-title">Current Power Explained</h2>
+          <p class="progress-layers-sub">Hunter Rank combines your initial build analysis with the progression you have truly earned after onboarding.</p>
+        </div>
+        <div class="progress-rank-summary">
+          <span class="progress-rank-current">Rank ${rankInfo.rank}</span>
+          <span class="progress-rank-formula">Start ${startingRank} + Earned ${earnedRankGain}</span>
+        </div>
+      </div>
+      <div class="progress-layers-grid">
+        <article class="progress-layer-card progress-layer-start">
+          <div class="progress-layer-label">Starting Build Power</div>
+          <div class="progress-layer-value">Assessment Rank ${startingRank}</div>
+          <p class="progress-layer-copy">This opening power comes from your initial assessment and build analysis. It defines your starting profile before any real quest or boss progression.</p>
+          <div class="progress-layer-metrics">
+            <div class="progress-layer-metric">
+              <span>Assigned Class</span>
+              <strong>${classDef ? `${classDef.icon} ${escapeHtml(classDef.name)}` : 'Not assigned'}</strong>
+            </div>
+            <div class="progress-layer-metric">
+              <span>Build Signature</span>
+              <strong>${topPrimary.length ? topPrimary.map(stat => `${stat.icon} ${escapeHtml(stat.name)}`).join(' · ') : 'Pending analysis'}</strong>
+            </div>
+          </div>
+        </article>
+        <article class="progress-layer-card progress-layer-earned ${hasEarnedProgress ? 'has-progress' : 'is-empty'}">
+          <div class="progress-layer-label">Earned Progression</div>
+          <div class="progress-layer-value">${hasEarnedProgress ? `+${earnedRankGain} earned rank` : 'No earned progression yet'}</div>
+          <p class="progress-layer-copy">These numbers start at zero after onboarding and grow only through real actions: quests, boss clears, earned XP, streak consistency, factions and gear gained.</p>
+          <div class="progress-earned-grid">
+            <div class="progress-earned-item"><span>Quest Completion</span><strong>${state.questsCompleted}</strong></div>
+            <div class="progress-earned-item"><span>Boss Clears</span><strong>${state.bossesDefeated.length}</strong></div>
+            <div class="progress-earned-item"><span>Earned XP</span><strong>${state.totalXP}</strong></div>
+            <div class="progress-earned-item"><span>Streak</span><strong>${state.currentStreak}</strong></div>
+            <div class="progress-earned-item"><span>Faction Reputation</span><strong>${leadFaction ? `${leadFaction.faction.icon} ${leadFaction.rep} REP` : `${totalFactionRep} REP`}</strong></div>
+            <div class="progress-earned-item"><span>Gear Gained</span><strong>${gearCount}</strong></div>
+          </div>
+        </article>
+      </div>
+    </section>`;
+}
+
+function getQuestTabIdForQuest(quest) {
+  if (!quest) return 'corpo';
+  if (quest.type === 'SPECIAL') return 'special';
+  if (quest.timed) return 'timed';
+  if (quest.type === 'RECOVERY' || quest.cat === 'SOCIAL') return 'emozioni';
+  if (quest.cat === 'COGNITIVE' || quest.cat === 'NEURAL') return 'mente';
+  return 'corpo';
+}
+
+function getRecommendedMissionMode(assessment, quest) {
+  if (!assessment || !quest) return 'medium';
+  if (isForcedRest() || assessment.ansState === 'SYMPATHETIC' || assessment.sleep <= 4 || assessment.energy <= 4) return 'easy';
+  if (quest.type === 'SPECIAL' && assessment.energy >= 7 && assessment.sleep >= 7 && assessment.mood >= 6) return 'hard';
+  return 'medium';
+}
+
+function estimateQuestOutcome(quest, mode='medium') {
+  if (!quest) return null;
+  const modeInfo = DIFFICULTY_MODES[mode] || DIFFICULTY_MODES.medium;
+  const diffEff = Math.max(1, quest.diff + modeInfo.diffOffset);
+  const rarity = getQuestRarity(diffEff);
+  const rarityMult = RARITY_MULT[rarity];
+  const buffMult = getBuffXPMult();
+  const factionMult = getFactionMult(quest.cat);
+  const dailyBonus = getDailyBonus();
+  const faction = getFactionDefinition(quest.cat);
+  let dailyMult = 1;
+
+  if (dailyBonus.questId === quest.id && dailyBonus.bonus === '2X_XP') dailyMult = 2;
+
+  let totalXP = 0;
+  for (const reward of quest.rewards) {
+    const pen = getDebuffPenalty(reward.stat);
+    let effective = calcXP(reward.xp, diffEff, state.currentStreak, pen);
+    effective = Math.round(effective * rarityMult * modeInfo.xpMult * buffMult * factionMult * dailyMult);
+    effective += getBuffBonusXP(reward.stat);
+    totalXP += effective;
+  }
+
+  const repGain = Math.round(10 * rarityMult * modeInfo.xpMult);
+  const streakPct = Math.round(Math.min(state.currentStreak * 5, 50));
+  const lootItems = quest.type === 'SPECIAL' ? getQuestLootItems(quest) : [];
+  const materialSetId = quest.type === 'SPECIAL'
+    ? (lootItems[0]?.set || 'IRON_HEART')
+    : ({ PHYSIQUE:'IRON_HEART', COGNITIVE:'MONARCH_SYNTH', NEURAL:'MONARCH_SYNTH', SOCIAL:'SHADOWFORGED' }[quest.cat] || 'IRON_HEART');
+  const material = MATERIAL_CATALOG[SET_PRIMARY_MATERIAL[materialSetId]] || null;
+  const materialAmount = quest.type === 'SPECIAL' ? 2 : mode === 'hard' ? 2 : 1;
+
+  let itemProgress = 'Nessun progresso gear diretto';
+  if (lootItems.length > 0) {
+    itemProgress = `${lootItems[0].icon} ${lootItems[0].name}${lootItems.length > 1 ? ` +${lootItems.length - 1} varianti` : ''}`;
+  } else if (material) {
+    itemProgress = `${material.icon} ${material.name} x${materialAmount}`;
+  }
+
+  return {
+    totalXP,
+    streakPct,
+    repGain,
+    itemProgress,
+    faction,
+    modeInfo,
+    rarity,
+  };
+}
+
+function getTodayBossDirective(assessment, scanReady, lowRecoveryWindow) {
+  const strengthsBoss = chooseSuggestedBoss('strengths');
+  const weaknessesBoss = chooseSuggestedBoss('weaknesses');
+  const fearsBoss = chooseSuggestedBoss('fears');
+  const engageBoss = strengthsBoss && meetsReq(strengthsBoss.req) ? strengthsBoss : null;
+  const fallbackBoss = fearsBoss || weaknessesBoss || strengthsBoss || null;
+
+  if (!scanReady) {
+    return {
+      kind: 'avoid',
+      source: 'scan',
+      boss: fallbackBoss,
+      title: 'Scan richiesto prima del raid',
+      summary: 'Senza Daily Scan il sistema non valida un ingaggio boss. Prima aggiorna biomarcatori e rischio.',
+      ctaLabel: 'Open Boss Chamber',
+    };
+  }
+
+  if (lowRecoveryWindow) {
+    const boss = fearsBoss || weaknessesBoss || fallbackBoss;
+    return {
+      kind: 'avoid',
+      source: boss === fearsBoss ? 'fears' : 'weaknesses',
+      boss,
+      title: 'Boss da evitare oggi',
+      summary: 'Oggi il sistema privilegia recovery, controllo e progressione sicura. Evita un fight ad alto attrito.',
+      ctaLabel: 'Review Boss Risk',
+    };
+  }
+
+  if (engageBoss) {
+    return {
+      kind: 'engage',
+      source: 'strengths',
+      boss: engageBoss,
+      title: 'Boss consigliato ora',
+      summary: 'Il tuo stato attuale supporta un tentativo boss. Questa e la finestra migliore per convertire momentum in progressione.',
+      ctaLabel: 'Open Boss Chamber',
+    };
+  }
+
+  return {
+    kind: 'avoid',
+    source: fallbackBoss === fearsBoss ? 'fears' : 'weaknesses',
+    boss: fallbackBoss,
+    title: 'Boss da rimandare',
+    summary: 'Prima chiudi una missione mirata: servono piu livello, gear o requisiti attivi per un pull pulito.',
+    ctaLabel: 'Review Boss Risk',
+  };
+}
+
+function getAssessmentBossReasoning(input, ans, directive, lowRecovery) {
+  const reasons = [];
+  const classDef = CLASS_DEFINITIONS.find(entry => entry.id === state.playerClass);
+
+  if (!directive?.boss) {
+    return ['Nessun boss utile da mostrare finché il sistema non vede un target coerente con il tuo stato e la tua progressione.'];
+  }
+
+  if (directive.kind === 'avoid') {
+    if (lowRecovery) reasons.push('Recupero fragile: oggi questo boss rischia di amplificare attrito interno invece di trasformarlo in progresso.');
+    if (input.hrv < 50 || input.bolt < 15) reasons.push('Segnali fisiologici bassi: meglio evitare pattern che richiedono più controllo di quello che hai disponibile oggi.');
+    if (input.sleep <= 4 || input.energy <= 4) reasons.push('Sonno o energia bassi: il sistema preferisce contenimento e stabilizzazione, non confronto diretto.');
+    if (directive.source === 'fears') reasons.push('Il boss è legato alle tue paure dichiarate: oggi è più utile riconoscerlo e non inseguirlo.');
+    if (directive.source === 'weaknesses') reasons.push('Il boss colpisce una frattura ancora aperta della build: prima conviene rafforzare il punto debole.');
+  } else {
+    if (ans !== 'SYMPATHETIC' && input.energy >= 6 && input.sleep >= 6) reasons.push('Stato stabile: oggi hai abbastanza margine per trasformare il challenge in progresso reale.');
+    if (directive.source === 'strengths') reasons.push('Il boss è coerente con i tuoi punti forti, quindi la build ha più probabilità di reggere il confronto.');
+    if (classDef) reasons.push(`${classDef.icon} ${classDef.name} ha una finestra utile quando precisione, disciplina o tenuta sono sopra soglia.`);
+    if (meetsReq(directive.boss.req)) reasons.push('I requisiti attuali sono soddisfatti: non è un target decorativo, è un fight realisticamente affrontabile.');
+  }
+
+  if (!reasons.length) reasons.push(directive.summary);
+  return reasons.slice(0, 3);
+}
+
+function buildCampaignStatusModel() {
+  const activeTargets = BOSS_DEFINITIONS
+    .filter(boss => !state.bossesDefeated.includes(boss.id))
+    .map(boss => ({
+      boss,
+      effects: getBossCampaignEffects(boss),
+      ready: meetsReq(boss.req),
+    }))
+    .filter(entry => entry.effects.length > 0)
+    .sort((left, right) => Number(right.ready) - Number(left.ready) || left.boss.level - right.boss.level);
+
+  if (!activeTargets.length) {
+    return {
+      title: 'Campaign dormant',
+      copy: 'Nessun encounter futuro è ancora stato alterato da vittorie precedenti. Il prossimo clear attiverà una nuova diramazione di campagna.',
+      badge: 'BASE STATE',
+      targetBoss: null,
+      effectLines: [],
+      ctaLabel: 'Open Boss Chamber',
+    };
+  }
+
+  const primary = activeTargets[0];
+  return {
+    title: `${primary.boss.icon} ${primary.boss.name}`,
+    copy: `${primary.effects.length} effetti campagna sono già attivi su questo encounter.${primary.ready ? ' Il fight è affrontabile ora.' : ' Serve ancora preparazione prima del pull.'}`,
+    badge: primary.ready ? 'CAMPAIGN LIVE' : 'CAMPAIGN LOCKED',
+    targetBoss: primary.boss,
+    effectLines: primary.effects.slice(0, 3).map(effect => `${effect.sourceBoss?.icon || '☠'} ${effect.sourceBoss?.name || effect.sourceBossId}: ${effect.summary}`),
+    ctaLabel: 'Review Campaign Boss',
+  };
+}
+
+function buildTodayCommandModel() {
+  const assessment = getLatestAssessment();
+  const scanReady = hasTodayAssessment();
+  const classDef = CLASS_DEFINITIONS.find(c => c.id === state.playerClass) || null;
+  const rankInfo = getHunterRankInfo();
+  const topStat = [...PRIMARY_STATS].sort((a, b) => getEffectiveStatLv(b.id) - getEffectiveStatLv(a.id))[0];
+  const weakStat = [...PRIMARY_STATS].sort((a, b) => getEffectiveStatLv(a.id) - getEffectiveStatLv(b.id))[0];
+  const lowRecoveryWindow = !scanReady
+    || isForcedRest()
+    || assessment?.ansState === 'SYMPATHETIC'
+    || (assessment && (assessment.sleep <= 4 || assessment.energy <= 4));
+
+  let missionSource = null;
+  if (scanReady) missionSource = lowRecoveryWindow ? 'weaknesses' : 'strengths';
+  if (scanReady && !lowRecoveryWindow && assessment?.mood <= 4 && chooseRecommendedQuest('fears')) missionSource = 'fears';
+
+  const mission = missionSource
+    ? chooseRecommendedQuest(missionSource) || chooseRecommendedQuest('strengths') || chooseRecommendedQuest('weaknesses') || chooseRecommendedQuest('fears')
+    : null;
+  const missionMode = getRecommendedMissionMode(assessment, mission);
+  const rewardPreview = estimateQuestOutcome(mission, missionMode);
+  const bossDirective = getTodayBossDirective(assessment, scanReady, lowRecoveryWindow);
+  const campaign = buildCampaignStatusModel();
+
+  const stateTitle = !scanReady
+    ? 'Daily Scan Required'
+    : lowRecoveryWindow
+      ? 'Recovery Window Active'
+      : 'Command Window Open';
+  const stateCopy = !scanReady
+    ? 'Il sistema non ha una lettura giornaliera valida. Prima di tutto serve un Daily Scan per sbloccare una raccomandazione affidabile.'
+    : lowRecoveryWindow
+      ? 'Biomarcatori e recovery suggeriscono controllo, non overload. La missione raccomandata riduce attrito e stabilizza il sistema.'
+      : 'I segnali di oggi supportano una missione ad alto valore. Hai una finestra pulita per convertire energia in progressione.';
+  const stateBadge = !scanReady ? 'SCAN MISSING' : lowRecoveryWindow ? 'RECOVERY' : 'READY';
+  const stateTone = !scanReady || lowRecoveryWindow ? 'warning' : 'success';
+
+  const whyRows = [
+    {
+      label: 'Biomarkers',
+      value: assessment
+        ? `HRV ${assessment.hrv}ms, BOLT ${assessment.bolt}s, Sleep ${assessment.sleep}/10, Energy ${assessment.energy}/10, Mood ${assessment.mood}/10, stato ${assessment.ansState}.`
+        : 'Nessun Daily Scan registrato oggi. Il sistema sta lavorando con dati incompleti.',
+    },
+    {
+      label: 'Build',
+      value: `${classDef ? `${classDef.icon} ${classDef.name}` : 'Hunter'} · Class Sync ${getClassLevel()} · top stat ${topStat?.name || 'N/D'} LV.${topStat ? getEffectiveStatLv(topStat.id) : 0}.`,
+    },
+    {
+      label: 'Weaknesses & Fears',
+      value: `${state.profileWeaknesses ? `Weaknesses: ${state.profileWeaknesses}.` : 'Weaknesses non definite.'} ${state.profileFears ? `Fears: ${state.profileFears}.` : 'Fears non definite.'}`,
+    },
+    {
+      label: 'Current Progression',
+      value: `Hunter Rank ${rankInfo.rank}, streak ${state.currentStreak}, boss ${state.bossesDefeated.length}/${BOSS_DEFINITIONS.length}, gear power +${getTotalGearPower()}, punto piu fragile ${weakStat?.name || 'N/D'} LV.${weakStat ? getEffectiveStatLv(weakStat.id) : 0}.`,
+    },
+  ];
+
+  return {
+    scanReady,
+    stateTitle,
+    stateCopy,
+    stateBadge,
+    stateTone,
+    mission,
+    missionMode,
+    rewardPreview,
+    bossDirective,
+    campaign,
+    whyRows,
+  };
+}
+
+function renderTodayCommand() {
+  const root = $('todayCommand');
+  if (!root) return;
+
+  const model = buildTodayCommandModel();
+  const mission = model.mission;
+  const missionMode = DIFFICULTY_MODES[model.missionMode] || DIFFICULTY_MODES.medium;
+  const reward = model.rewardPreview;
+  const boss = model.bossDirective.boss;
+  const campaign = model.campaign;
+
+  root.innerHTML = `
+    <div class="today-command-head">
+      <div>
+        <div class="today-command-kicker">TACTICAL COMMAND CENTER</div>
+        <h2 class="today-command-title">Today Command</h2>
+        <p class="today-command-sub">Una sola lettura chiara. Una sola azione prioritaria. Il resto viene dopo.</p>
+      </div>
+      <div class="today-command-state ${model.stateTone}">${model.stateBadge}</div>
+    </div>
+    <div class="today-command-grid">
+      <article class="today-card today-card-state">
+        <div class="today-card-label">System State Today</div>
+        <div class="today-card-title">${escapeHtml(model.stateTitle)}</div>
+        <p class="today-card-copy">${escapeHtml(model.stateCopy)}</p>
+        <div class="today-chip-row">
+          <span class="today-chip">${escapeHtml(state.playerName || 'Hunter')}</span>
+          <span class="today-chip">Class Sync ${getClassLevel()}</span>
+          <span class="today-chip">Streak ${state.currentStreak}</span>
+          <span class="today-chip">Boss ${state.bossesDefeated.length}/${BOSS_DEFINITIONS.length}</span>
+        </div>
+      </article>
+
+      <article class="today-card today-card-mission">
+        <div class="today-card-label">Recommended Mission Now</div>
+        <div class="today-card-title">${mission ? `${mission.icon} ${escapeHtml(mission.name)}` : 'Run Daily Scan'}</div>
+        <p class="today-card-copy">${mission ? escapeHtml(mission.desc) : 'Senza scan giornaliero il sistema non puo scegliere una missione affidabile. Avvia subito la lettura dei biomarcatori.'}</p>
+        <div class="today-meta-row">
+          <span class="today-meta-pill">${mission ? `${missionMode.icon} ${missionMode.label}` : 'SCAN REQUIRED'}</span>
+          <span class="today-meta-pill">${mission ? `${mission.dur} min` : 'Assessment 30 sec'}</span>
+          <span class="today-meta-pill">${mission ? `${getQuestRarity(Math.max(1, mission.diff + missionMode.diffOffset))}` : 'Unlock routing'}</span>
+        </div>
+        <div class="today-cta-row">
+          <button class="btn-primary full-w today-primary-cta" id="todayCommandMissionCta">${mission ? 'Start Mission' : 'Run Daily Scan'}</button>
+        </div>
+      </article>
+
+      <article class="today-card today-card-boss ${model.bossDirective.kind === 'avoid' ? 'is-warning' : 'is-boss-ready'}">
+        <div class="today-card-label">Recommended Boss or Boss to Avoid</div>
+        <div class="today-card-title">${boss ? `${boss.icon} ${escapeHtml(boss.name)}` : 'No boss target available'}</div>
+        <p class="today-card-copy">${escapeHtml(model.bossDirective.summary)}</p>
+        <div class="today-meta-row">
+          <span class="today-meta-pill ${model.bossDirective.kind === 'avoid' ? 'warning' : 'success'}">${model.bossDirective.kind === 'avoid' ? 'Avoid Window' : 'Engage Window'}</span>
+          <span class="today-meta-pill">${boss ? `LV ${boss.level}` : 'No target'}</span>
+          <span class="today-meta-pill">${boss && meetsReq(boss.req) ? 'Ready' : 'Prep Needed'}</span>
+        </div>
+        <div class="today-cta-row">
+          <button class="btn-secondary full-w" id="todayCommandBossCta">${escapeHtml(model.bossDirective.ctaLabel)}</button>
+        </div>
+      </article>
+
+      <article class="today-card today-card-campaign ${campaign.targetBoss ? 'is-campaign-live' : ''}">
+        <div class="today-card-label">Active Campaign</div>
+        <div class="today-card-title">${escapeHtml(campaign.title)}</div>
+        <p class="today-card-copy">${escapeHtml(campaign.copy)}</p>
+        <div class="today-meta-row">
+          <span class="today-meta-pill ${campaign.targetBoss && meetsReq(campaign.targetBoss.req) ? 'success' : 'warning'}">${escapeHtml(campaign.badge)}</span>
+          <span class="today-meta-pill">${campaign.targetBoss ? `LV ${campaign.targetBoss.level}` : 'Next clear unlocks chain'}</span>
+        </div>
+        ${campaign.effectLines.length ? `
+          <div class="today-campaign-list">
+            ${campaign.effectLines.map(line => `<div class="today-campaign-row">${escapeHtml(line)}</div>`).join('')}
+          </div>
+        ` : ''}
+        <div class="today-cta-row">
+          <button class="btn-secondary full-w" id="todayCommandCampaignCta">${escapeHtml(campaign.ctaLabel)}</button>
+        </div>
+      </article>
+
+      <article class="today-card today-card-reward">
+        <div class="today-card-label">Immediate Reward</div>
+        <div class="today-reward-grid">
+          <div class="today-reward-item">
+            <span class="today-reward-name">XP Preview</span>
+            <strong>${reward ? `+${reward.totalXP} XP` : 'Pending scan'}</strong>
+          </div>
+          <div class="today-reward-item">
+            <span class="today-reward-name">Streak Effect</span>
+            <strong>${reward ? `+${reward.streakPct}% active` : `Streak ${state.currentStreak}`}</strong>
+          </div>
+          <div class="today-reward-item">
+            <span class="today-reward-name">Item Progress</span>
+            <strong>${reward ? escapeHtml(reward.itemProgress) : 'Mission routing locked'}</strong>
+          </div>
+          <div class="today-reward-item">
+            <span class="today-reward-name">Faction Gain</span>
+            <strong>${reward && reward.faction ? `${reward.faction.icon} +${reward.repGain} REP` : 'Pending target'}</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="today-card today-card-why">
+        <div class="today-card-label">Why This Is Recommended</div>
+        <div class="today-why-list">
+          ${model.whyRows.map(row => `
+            <div class="today-why-row">
+              <span class="today-why-label">${escapeHtml(row.label)}</span>
+              <p>${escapeHtml(row.value)}</p>
+            </div>
+          `).join('')}
+        </div>
+      </article>
+    </div>`;
+
+  const missionBtn = $('todayCommandMissionCta');
+  if (missionBtn) {
+    missionBtn.addEventListener('click', () => {
+      if (!model.scanReady || !mission) {
+        switchScreen('assess');
+        return;
+      }
+      questTab = getQuestTabIdForQuest(mission);
+      switchScreen('quests');
+      setTimeout(() => startQuestWithMode(mission.id, model.missionMode), 80);
+    });
+  }
+
+  const bossBtn = $('todayCommandBossCta');
+  if (bossBtn) {
+    bossBtn.addEventListener('click', () => {
+      switchScreen('boss');
+      if (boss && model.bossDirective.kind === 'engage' && meetsReq(boss.req)) {
+        setTimeout(() => startBossFight(boss), 80);
+      }
+    });
+  }
+
+  const campaignBtn = $('todayCommandCampaignCta');
+  if (campaignBtn) {
+    campaignBtn.addEventListener('click', () => {
+      switchScreen('boss');
+      if (campaign.targetBoss && meetsReq(campaign.targetBoss.req)) {
+        setTimeout(() => startBossFight(campaign.targetBoss), 80);
+      }
+    });
+  }
+}
+
+function getStartHereElapsedDays() {
+  const startedAt = state.startHere?.startedAt;
+  if (!startedAt) return 1;
+  const started = new Date(startedAt);
+  const now = new Date();
+  started.setHours(0, 0, 0, 0);
+  now.setHours(0, 0, 0, 0);
+  const diff = Math.floor((now - started) / 86400000);
+  return Math.max(1, diff + 1);
+}
+
+function shouldShowStartHere() {
+  if (!state.onboardingDone) return false;
+  const elapsed = getStartHereElapsedDays();
+  const hasNoQuestHistory = (state.questsCompleted || 0) === 0;
+  return hasNoQuestHistory || (elapsed <= 7 && !isStartHereFullyCompleted());
+}
+
+function isStartHereFullyCompleted() {
+  return [1, 2, 3, 4, 5, 6, 7].every(day => isStartHereDayComplete(day));
+}
+
+function getStartHereBeginnerBoss() {
+  return [...BOSS_DEFINITIONS]
+    .filter(boss => !state.bossesDefeated.includes(boss.id))
+    .sort((a, b) => a.level - b.level)[0] || BOSS_DEFINITIONS[0] || null;
+}
+
+function getStartHereRewardQuest() {
+  const assessment = getLatestAssessment();
+  return getAvailableQuests(assessment).find(quest => quest.type === 'SPECIAL')
+    || SPECIAL_QUESTS.find(quest => !getDoneInfo(quest.id) && meetsReq(quest.req))
+    || null;
+}
+
+function getStartHereWeeklyDirection() {
+  const weakStat = [...PRIMARY_STATS].sort((a, b) => getEffectiveStatLv(a.id) - getEffectiveStatLv(b.id))[0];
+  const path = state.startHere?.buildPath;
+  if (path === 'vanguard') {
+    return `Consolida il percorso Vanguard: alza ${weakStat?.name || 'la tua stat piu fragile'} e prepara un boss più pesante.`;
+  }
+  if (path === 'oracle') {
+    return `Consolida il percorso Oracle: usa scan frequenti, precisione cognitiva e controllo prima del prossimo raid.`;
+  }
+  return `La prossima crescita passa da ${weakStat?.name || 'una stat prioritaria'} e da una missione che riduca attrito.`;
+}
+
+function isStartHereDayComplete(day) {
+  const scanReady = hasTodayAssessment();
+  const rewardUnlocked = getOwnedEquipmentItems().length > 0 || Object.values(state.materials || {}).some(value => value > 0);
+  switch (day) {
+    case 1:
+      return state.assessmentHistory.length > 0 && (state.questsCompleted || 0) > 0;
+    case 2:
+      return !!state.startHere?.basicsReviewed;
+    case 3:
+      return state.bossesDefeated.length > 0;
+    case 4:
+      return rewardUnlocked;
+    case 5:
+      return !!state.startHere?.buildPath;
+    case 6:
+      return scanReady && !!state.startHere?.adaptiveReviewed;
+    case 7:
+      return !!state.startHere?.weeklyRecapReviewed;
+    default:
+      return false;
+  }
+}
+
+function getStartHereUnlockedDay() {
+  if ((state.questsCompleted || 0) === 0) return 1;
+  return Math.min(7, getStartHereElapsedDays());
+}
+
+function getStartHereActiveDay() {
+  const unlocked = getStartHereUnlockedDay();
+  for (let day = 1; day <= unlocked; day += 1) {
+    if (!isStartHereDayComplete(day)) return day;
+  }
+  return Math.min(7, unlocked + 1);
+}
+
+function getStartHereBuildChoices() {
+  return [
+    {
+      id: 'vanguard',
+      icon: '⚔',
+      name: 'Vanguard Path',
+      copy: 'Corpo, momentum e pressione controllata. Sblocca reward con missioni piu fisiche e boss entry più aggressive.',
+    },
+    {
+      id: 'oracle',
+      icon: '🔮',
+      name: 'Oracle Path',
+      copy: 'Scan, focus e adattamento. Spinge su decisioni più pulite, controllo e build neuro-tattica.',
+    },
+  ];
+}
+
+function getStartHereDefinition(day) {
+  const assessment = getLatestAssessment();
+  const todayModel = buildTodayCommandModel();
+  const beginnerBoss = getStartHereBeginnerBoss();
+  const rewardQuest = getStartHereRewardQuest();
+  const buildChoices = getStartHereBuildChoices();
+  const equippedCount = getOwnedEquipmentItems().length;
+  const rewardUnlocked = equippedCount > 0 || Object.values(state.materials || {}).some(value => value > 0);
+
+  const defs = {
+    1: {
+      dayLabel: 'Day 1',
+      title: 'Run your first scan and clear your first mission',
+      copy: 'Prima leggi il sistema. Poi esegui una sola missione. Questo basta per avviare davvero la progressione.',
+      status: hasTodayAssessment()
+        ? `Scan online${(state.questsCompleted || 0) > 0 ? ' · prima missione completata' : ' · missione ancora da lanciare'}`
+        : 'Daily Scan mancante',
+      ctaLabel: hasTodayAssessment() ? 'Start First Mission' : 'Run Daily Scan',
+      preview: assessment
+        ? `Ultimo scan: HRV ${assessment.hrv}ms · BOLT ${assessment.bolt}s · ${assessment.ansState}`
+        : 'Il sistema non ha ancora biomarcatori validi per guidarti.',
+    },
+    2: {
+      dayLabel: 'Day 2',
+      title: 'Learn the four signals that matter',
+      copy: 'Ignora tutto il resto. XP fa crescere le stat, Hunter Rank misura il profilo, Class Sync dice quanto la build è coerente, Streak moltiplica il momentum.',
+      status: `XP ${state.totalXP} · Rank ${getHunterRankInfo().rank} · Class Sync ${getClassLevel()} · Streak ${state.currentStreak}`,
+      ctaLabel: 'I Understand The Basics',
+      preview: 'Memorizza solo queste quattro metriche. Sono la base di tutte le decisioni future.',
+    },
+    3: {
+      dayLabel: 'Day 3',
+      title: 'Enter your first beginner boss',
+      copy: 'Il boss non serve a punirti. Serve a darti una prima soglia vera. Affronta il bersaglio piu accessibile e impara il ritmo del raid.',
+      status: beginnerBoss ? `${beginnerBoss.icon} ${beginnerBoss.name} · ${meetsReq(beginnerBoss.req) ? 'Ready' : 'Prep Needed'}` : 'Nessun beginner boss disponibile',
+      ctaLabel: beginnerBoss && meetsReq(beginnerBoss.req) ? 'Enter Beginner Boss' : 'Open Boss Chamber',
+      preview: beginnerBoss ? `${beginnerBoss.title}. ${beginnerBoss.emotionLabel || 'Emotional signature attiva'}.` : 'Completa più progressione per sbloccare il primo boss.',
+    },
+    4: {
+      dayLabel: 'Day 4',
+      title: 'Unlock your first meaningful reward',
+      copy: 'Da oggi la progressione deve lasciare una traccia concreta: un pezzo gear, un materiale utile, o un upgrade che cambia il tuo valore reale.',
+      status: rewardUnlocked ? `Reward sbloccata · ${equippedCount} pezzi gear attivi` : rewardQuest ? `${rewardQuest.icon} ${rewardQuest.name}` : 'Reward hunt non ancora pronta',
+      ctaLabel: rewardQuest ? 'Open Reward Hunt' : 'Open Armory',
+      preview: rewardQuest ? `Target consigliato: ${rewardQuest.desc}` : 'Controlla gear, set e materiali già raccolti.',
+    },
+    5: {
+      dayLabel: 'Day 5',
+      title: 'Choose your build direction',
+      copy: 'Non serve una build perfetta. Serve una direzione chiara. Scegli un profilo e lascia che il sistema inizi a leggerti meglio.',
+      status: state.startHere?.buildPath ? `Path attiva: ${state.startHere.buildPath === 'vanguard' ? 'Vanguard' : 'Oracle'}` : 'Nessuna path selezionata',
+      ctaLabel: state.startHere?.buildPath ? 'Confirm Build Direction' : 'Choose Build Direction',
+      preview: 'Vanguard privilegia impatto e reward fisica. Oracle privilegia controllo, scan e adattamento.',
+      choices: buildChoices,
+    },
+    6: {
+      dayLabel: 'Day 6',
+      title: 'Receive an adaptive recommendation',
+      copy: 'Ora il sistema usa i tuoi dati reali per dirti cosa fare adesso, non in astratto. Devi solo leggere una raccomandazione e seguirla.',
+      status: todayModel.mission ? `${todayModel.mission.icon} ${todayModel.mission.name}` : 'Recommendation bloccata finché manca lo scan',
+      ctaLabel: hasTodayAssessment() ? 'Review Adaptive Command' : 'Run Daily Scan',
+      preview: hasTodayAssessment() && todayModel.mission
+        ? `Motivo principale: ${todayModel.stateTitle}. Reward preview ${todayModel.rewardPreview ? `+${todayModel.rewardPreview.totalXP} XP` : 'in attesa'}.`
+        : 'Completa uno scan giornaliero per ricevere una raccomandazione adattiva affidabile.',
+    },
+    7: {
+      dayLabel: 'Day 7',
+      title: 'See your weekly recap and next direction',
+      copy: 'Non guardare tutto. Guarda il pattern: quante missioni hai chiuso, quanta stabilità hai creato e dove devi crescere adesso.',
+      status: `${state.questsCompleted} quest · ${state.bossesDefeated.length} boss · streak ${state.currentStreak}`,
+      ctaLabel: 'View Weekly Recap',
+      preview: getStartHereWeeklyDirection(),
+      recap: {
+        missions: state.questsCompleted,
+        bosses: state.bossesDefeated.length,
+        rank: getHunterRankInfo().rank,
+        direction: getStartHereWeeklyDirection(),
+      },
+    },
+  };
+
+  return defs[day];
+}
+
+function renderStartHereModule() {
+  const root = $('startHereModule');
+  if (!root) return;
+  if (!shouldShowStartHere()) {
+    startHerePreviewDay = null;
+    root.innerHTML = '';
+    root.classList.add('hidden');
+    return;
+  }
+
+  root.classList.remove('hidden');
+  const unlockedDay = getStartHereUnlockedDay();
+  const activeDay = getStartHereActiveDay();
+  const displayDay = startHerePreviewDay && startHerePreviewDay <= unlockedDay ? startHerePreviewDay : activeDay;
+  const activeDef = getStartHereDefinition(displayDay);
+  const completedCount = [1, 2, 3, 4, 5, 6, 7].filter(day => isStartHereDayComplete(day)).length;
+  const selectedBuild = state.startHere?.buildPath;
+  const nextDay = displayDay < 7 ? getStartHereDefinition(Math.min(7, displayDay + 1)) : null;
+
+  root.innerHTML = `
+    <div class="start-here-shell">
+      <div class="start-here-head">
+        <div>
+          <div class="start-here-kicker">FIRST 7 DAYS</div>
+          <h2 class="start-here-title">Start Here</h2>
+          <p class="start-here-sub">Un solo compito al giorno. Nessun muro di testo. Solo la prossima mossa giusta.</p>
+        </div>
+        <div class="start-here-progress-copy">${completedCount}/7 complete</div>
+      </div>
+      <div class="start-here-progress-bar"><span style="width:${Math.round((completedCount / 7) * 100)}%"></span></div>
+      <div class="start-here-days">
+        ${[1, 2, 3, 4, 5, 6, 7].map(day => {
+          const complete = isStartHereDayComplete(day);
+          const locked = day > unlockedDay;
+          const active = day === displayDay;
+          return `<button class="start-here-day ${complete ? 'done' : ''} ${locked ? 'locked' : ''} ${active ? 'active' : ''}" data-start-here-day="${day}" ${locked ? 'disabled' : ''}>
+            <span class="start-here-day-num">${day}</span>
+            <span class="start-here-day-state">${complete ? 'Clear' : locked ? 'Locked' : active ? 'Now' : 'Open'}</span>
+          </button>`;
+        }).join('')}
+      </div>
+      <article class="start-here-card" id="startHereCard">
+        <div class="start-here-card-top">
+          <div>
+            <div class="start-here-card-day">${escapeHtml(activeDef.dayLabel)}</div>
+            <h3 class="start-here-card-title">${escapeHtml(activeDef.title)}</h3>
+          </div>
+          <div class="start-here-card-status">${escapeHtml(activeDef.status)}</div>
+        </div>
+        <p class="start-here-card-copy">${escapeHtml(activeDef.copy)}</p>
+        <div class="start-here-preview">${escapeHtml(activeDef.preview)}</div>
+        ${activeDef.choices ? `
+          <div class="start-here-build-grid">
+            ${activeDef.choices.map(choice => `
+              <button class="start-here-build ${selectedBuild === choice.id ? 'selected' : ''}" data-build-path="${choice.id}">
+                <span class="start-here-build-title">${choice.icon} ${escapeHtml(choice.name)}</span>
+                <span class="start-here-build-copy">${escapeHtml(choice.copy)}</span>
+              </button>
+            `).join('')}
+          </div>
+        ` : ''}
+        ${activeDef.recap ? `
+          <div class="start-here-recap-grid">
+            <div class="start-here-recap-item"><span>Missions</span><strong>${activeDef.recap.missions}</strong></div>
+            <div class="start-here-recap-item"><span>Boss</span><strong>${activeDef.recap.bosses}</strong></div>
+            <div class="start-here-recap-item"><span>Rank</span><strong>${escapeHtml(activeDef.recap.rank)}</strong></div>
+            <div class="start-here-recap-item wide"><span>Next Direction</span><strong>${escapeHtml(activeDef.recap.direction)}</strong></div>
+          </div>
+        ` : ''}
+        <div class="start-here-actions">
+          <button class="btn-primary full-w" id="startHereMainCta">${escapeHtml(activeDef.ctaLabel)}</button>
+        </div>
+        ${nextDay ? `<div class="start-here-next">Tomorrow: ${escapeHtml(nextDay.title)}</div>` : '<div class="start-here-next">Onboarding cycle complete. Ora il sistema ti guida da solo.</div>'}
+      </article>
+    </div>`;
+
+  root.querySelectorAll('[data-start-here-day]').forEach(button => {
+    button.addEventListener('click', () => {
+      startHerePreviewDay = Number(button.dataset.startHereDay);
+      renderStatus();
+    });
+  });
+
+  root.querySelectorAll('[data-build-path]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.startHere.buildPath = button.dataset.buildPath;
+      saveState();
+      renderStatus();
+    });
+  });
+
+  const mainCta = $('startHereMainCta');
+  if (!mainCta) return;
+  mainCta.addEventListener('click', async () => {
+    switch (displayDay) {
+      case 1: {
+        if (!hasTodayAssessment()) {
+          switchScreen('assess');
+          return;
+        }
+        const mission = buildTodayCommandModel().mission;
+        const mode = buildTodayCommandModel().missionMode;
+        if (mission) {
+          questTab = getQuestTabIdForQuest(mission);
+          switchScreen('quests');
+          setTimeout(() => startQuestWithMode(mission.id, mode), 80);
+        }
+        return;
+      }
+      case 2:
+        state.startHere.basicsReviewed = true;
+        startHerePreviewDay = null;
+        await saveState();
+        renderStatus();
+        return;
+      case 3: {
+        const boss = getStartHereBeginnerBoss();
+        switchScreen('boss');
+        if (boss && meetsReq(boss.req)) {
+          setTimeout(() => startBossFight(boss), 80);
+        }
+        return;
+      }
+      case 4: {
+        const rewardQuest = getStartHereRewardQuest();
+        if (rewardQuest) {
+          questTab = getQuestTabIdForQuest(rewardQuest);
+          switchScreen('quests');
+          setTimeout(() => startQuestWithMode(rewardQuest.id, getRecommendedMissionMode(getLatestAssessment(), rewardQuest)), 80);
+          return;
+        }
+        switchScreen('gear');
+        return;
+      }
+      case 5:
+        if (!state.startHere.buildPath) return;
+        startHerePreviewDay = null;
+        await saveState();
+        renderStatus();
+        return;
+      case 6:
+        if (!hasTodayAssessment()) {
+          switchScreen('assess');
+          return;
+        }
+        state.startHere.adaptiveReviewed = true;
+        startHerePreviewDay = null;
+        await saveState();
+        switchScreen('status');
+        $('todayCommand')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        renderStatus();
+        return;
+      case 7:
+        state.startHere.weeklyRecapReviewed = true;
+        startHerePreviewDay = null;
+        await saveState();
+        renderStatus();
+        return;
+      default:
+        break;
+    }
+  });
+}
+
 function getRank(diff) {
   for (const r of RANK_TABLE) { if (diff >= r.d) return r.r; }
   return 'E';
@@ -1910,6 +3020,176 @@ function getQuestLootItems(quest) {
 
 function getSlotBlueprintQuests(slot) {
   return SPECIAL_QUESTS.filter(quest => getQuestLootItems(quest).some(item => item.slot === slot));
+}
+
+function getStatDefinition(statId) {
+  return [...PRIMARY_STATS, ...SECONDARY_STATS].find(stat => stat.id === statId) || null;
+}
+
+function getRequirementProgress(reqs=[]) {
+  if (!reqs.length) return { pct: 100, missing: [], summary: 'Requisiti completati.' };
+  const ratios = [];
+  const missing = [];
+
+  for (const req of reqs) {
+    const current = getEffectiveStatLv(req.stat);
+    const ratio = Math.max(0, Math.min(current / req.minLv, 1));
+    ratios.push(ratio);
+    if (current < req.minLv) {
+      const stat = getStatDefinition(req.stat);
+      missing.push({
+        statId: req.stat,
+        icon: stat?.icon || '✦',
+        name: stat?.name || req.stat,
+        current,
+        target: req.minLv,
+        gap: req.minLv - current,
+      });
+    }
+  }
+
+  const pct = Math.round((ratios.reduce((sum, value) => sum + value, 0) / ratios.length) * 100);
+  const summary = missing.length
+    ? missing.map(entry => `${entry.icon} ${entry.name} ${entry.current}/${entry.target}`).join(' · ')
+    : 'Requisiti centrati. Ti manca solo completare la missione.';
+  return { pct, missing, summary };
+}
+
+function getQuestUnlockSignal(quest) {
+  const reqProgress = getRequirementProgress(quest.req);
+  const completed = (state.specialQuestCompleted || []).includes(quest.id);
+  const ready = meetsReq(quest.req);
+  let pct = Math.round(reqProgress.pct * 0.92);
+  if (ready) pct = 92;
+  if (completed) pct = 100;
+  return {
+    pct,
+    ready,
+    completed,
+    reqProgress,
+  };
+}
+
+function getItemUnlockPreviewEntries(limit = 3) {
+  const owned = new Set(state.ownedEquipment || []);
+  const itemMap = new Map();
+
+  SPECIAL_QUESTS.forEach(quest => {
+    const signal = getQuestUnlockSignal(quest);
+    getQuestLootItems(quest).forEach(item => {
+      if (!item || owned.has(item.id)) return;
+      const existing = itemMap.get(item.id);
+      const source = {
+        type: 'mission',
+        questId: quest.id,
+        questName: quest.name,
+        questIcon: quest.icon,
+        diff: quest.diff,
+        pct: signal.pct,
+        ready: signal.ready,
+        completed: signal.completed,
+        reqProgress: signal.reqProgress,
+      };
+      if (!existing) {
+        itemMap.set(item.id, {
+          item,
+          slot: item.slot,
+          sources: [source],
+        });
+        return;
+      }
+      existing.sources.push(source);
+    });
+  });
+
+  return [...itemMap.values()]
+    .map(entry => {
+      const sortedSources = entry.sources.sort((left, right) => Number(left.completed) - Number(right.completed)
+        || Number(right.ready) - Number(left.ready)
+        || right.pct - left.pct
+        || left.questName.localeCompare(right.questName));
+      const bestSource = sortedSources[0];
+      const nearUnlock = bestSource.pct >= 75;
+      const sourceMissions = sortedSources.map(source => `${source.questIcon} ${source.questName}`);
+      return {
+        ...entry,
+        bestSource,
+        progressPct: bestSource.pct,
+        nearUnlock,
+        sourceMissions,
+        missingSummary: bestSource.reqProgress.summary,
+      };
+    })
+    .sort((left, right) => Number(right.bestSource.ready) - Number(left.bestSource.ready)
+      || right.progressPct - left.progressPct
+      || EQUIPMENT_SLOTS.indexOf(left.slot) - EQUIPMENT_SLOTS.indexOf(right.slot))
+    .slice(0, limit);
+}
+
+function getSlotUnlockPreview(slot, previewEntries) {
+  return previewEntries.find(entry => entry.slot === slot) || null;
+}
+
+function renderArmorySourceLine(entry, mode = 'default') {
+  const best = entry?.bestSource;
+  if (!best) return '';
+  const label = mode === 'compact' ? 'Missione da fare ora' : 'Sblocca con questa missione';
+  const alternatives = (entry.sources?.length || 0) > 1
+    ? ` · +${entry.sources.length - 1} altre rotte`
+    : '';
+  return `<div class="gear-source-line">${label}: <strong>${best.questIcon} ${escapeHtml(best.questName)}</strong>${alternatives}</div>`;
+}
+
+function openQuestBoardFromArmory(questId) {
+  const quest = findQuestById(questId);
+  if (!quest) return;
+  questTab = getQuestTabIdForQuest(quest);
+  pendingQuestBoardFocus = { questId };
+  switchScreen('quests');
+}
+
+function applyPendingQuestBoardFocus() {
+  if (!pendingQuestBoardFocus || currentScreen !== 'quests') return;
+  const card = document.querySelector(`.quest-card[data-quest-id="${pendingQuestBoardFocus.questId}"]`);
+  if (!card) return;
+  const detail = card.querySelector('.q-detail');
+  if (detail && !detail.classList.contains('open')) detail.classList.add('open');
+  card.classList.add('armory-focus');
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  setTimeout(() => card.classList.remove('armory-focus'), 2200);
+  pendingQuestBoardFocus = null;
+}
+
+function renderGearUnlockFeature(entry) {
+  if (!entry) {
+    return '<div class="gear-empty-state">Nessun nuovo unlock imminente rilevato. Continua con special quest e boss per aprire nuovi blueprint.</div>';
+  }
+  const best = entry.bestSource;
+  const statusLine = best.ready
+    ? 'Quest pronta: devi solo entrare e chiuderla.'
+    : entry.nearUnlock
+      ? 'Quasi sbloccato: sei a un passo dal drop.'
+      : 'Blueprint tracciato: il sistema ti mostra il prossimo reward piu vicino.';
+
+  return `
+    <article class="gear-unlock-feature-card gear-linked-preview ${entry.nearUnlock ? 'near-unlock' : ''}" data-armory-quest-id="${best.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(best.questName)} nel Quest Board">
+      <div class="gear-unlock-feature-head">
+        <div>
+          <div class="gear-unlock-kicker">CLOSEST RELIC</div>
+          <h2 class="gear-unlock-feature-title">${entry.item.icon} ${escapeHtml(entry.item.name)}</h2>
+          <p class="gear-unlock-feature-copy">${escapeHtml(entry.item.desc)}</p>
+        </div>
+        <div class="gear-unlock-badge ${entry.nearUnlock ? 'near' : ''}">${entry.progressPct}%</div>
+      </div>
+      <div class="gear-unlock-track"><span style="width:${entry.progressPct}%"></span></div>
+      <div class="gear-unlock-meta-row">
+        <span>${escapeHtml(EQUIPMENT_SLOT_LABELS[entry.item.slot])} · ${escapeHtml(entry.item.rarity)}</span>
+        <span>${best.questIcon} ${escapeHtml(best.questName)}</span>
+      </div>
+      ${renderArmorySourceLine(entry)}
+      <div class="gear-unlock-feature-status">${escapeHtml(statusLine)}</div>
+      <div class="gear-unlock-feature-missing">${escapeHtml(entry.missingSummary)}</div>
+    </article>`;
 }
 
 function grantSetUpgrade(setId, bonuses, sourceLabel='Boss Reward') {
@@ -2373,6 +3653,89 @@ function interpretANS(a) {
   if (a==='BALANCED') return 'EQUILIBRATO — Challenge autorizzate.';
   return 'RIPOSO — Ideale per compiti cognitivi.';
 }
+
+function getAssessmentHrvBaseline() {
+  const history = state.assessmentHistory.slice(-8, -1);
+  if (!history.length) return null;
+  return history.reduce((sum, entry) => sum + entry.hrv, 0) / history.length;
+}
+
+function getAssessmentSystemStateLabel(input, ans, lowRecovery) {
+  if (lowRecovery) return 'Recovery Limited';
+  if (ans === 'SYMPATHETIC') return 'High Alert';
+  if (ans === 'PARASYMPATHETIC') return 'Calm Precision';
+  if (input.energy >= 7 && input.sleep >= 7) return 'Performance Ready';
+  return 'Stable and Usable';
+}
+
+function getAssessmentMissionTypeLabel(quest) {
+  if (!quest) return 'Recovery micro-mission';
+  if (quest.type === 'RECOVERY') return 'Recovery mission';
+  if (quest.type === 'SPECIAL') return 'Adaptive challenge mission';
+  return `${quest.cat.charAt(0)}${quest.cat.slice(1).toLowerCase()} mission`;
+}
+
+function getAssessmentRecommendationReasoning(input, ans, quest, intensity, lowRecovery) {
+  const reasons = [];
+  const hrvBaseline = getAssessmentHrvBaseline();
+
+  if (lowRecovery) reasons.push('Recupero basso: il sistema protegge carico e durata.');
+  if (ans === 'SYMPATHETIC') reasons.push('Sei in allerta: meglio una missione più semplice e controllabile.');
+  if (input.sleep <= 4) reasons.push('Sonno basso: oggi conviene ridurre attrito e intensità.');
+  if (input.energy <= 4) reasons.push('Energia bassa: serve una missione che puoi chiudere senza sprecare risorse.');
+  if (input.mood <= 4 && !lowRecovery) reasons.push('Mood basso: la raccomandazione punta a darti una vittoria rapida e chiara.');
+  if (input.bolt < 15) reasons.push('Controllo respiratorio fragile: meglio evitare un carico troppo aggressivo.');
+  if (input.energy >= 7 && input.sleep >= 7 && ans !== 'SYMPATHETIC') reasons.push('Energia e sonno sono buoni: puoi tollerare una sfida più densa.');
+  if (hrvBaseline && input.hrv >= hrvBaseline * 1.05) reasons.push('HRV sopra il tuo recente standard: finestra di recupero favorevole.');
+  if (!reasons.length && quest) reasons.push(`La missione scelta è coerente con il tuo stato ${ans.toLowerCase()} e con il carico ${DIFFICULTY_MODES[intensity].label.toLowerCase()}.`);
+
+  return reasons.slice(0, 3);
+}
+
+function buildAssessmentSummary(input, ans, debuffs) {
+  const assessment = { ...input, ansState: ans };
+  const lowRecovery = isForcedRest()
+    || ans === 'SYMPATHETIC'
+    || input.sleep <= 4
+    || input.energy <= 4
+    || input.bolt < 15;
+  let source = 'weaknesses';
+
+  if (lowRecovery) source = 'weaknesses';
+  else if (input.mood <= 4) source = 'fears';
+  else if (input.energy >= 7 && input.sleep >= 7 && ans !== 'SYMPATHETIC') source = 'strengths';
+
+  const mission = chooseRecommendedQuest(source)
+    || getAvailableQuests(assessment).find(quest => !getDoneInfo(quest.id))
+    || getAvailableQuests(assessment)[0]
+    || null;
+  const intensity = getRecommendedMissionMode(assessment, mission);
+  const intensityInfo = DIFFICULTY_MODES[intensity] || DIFFICULTY_MODES.medium;
+  const outcome = estimateQuestOutcome(mission, intensity);
+  const why = getAssessmentRecommendationReasoning(input, ans, mission, intensity, lowRecovery);
+  const bossDirective = getTodayBossDirective(assessment, true, lowRecovery);
+  const bossWhy = getAssessmentBossReasoning(input, ans, bossDirective, lowRecovery);
+
+  return {
+    systemState: getAssessmentSystemStateLabel(input, ans, lowRecovery),
+    mission,
+    missionType: getAssessmentMissionTypeLabel(mission),
+    intensity,
+    intensityInfo,
+    lowRecovery,
+    riskWarning: lowRecovery
+      ? 'Recupero basso rilevato. Oggi la priorità è evitare overload, ridurre attrito e chiudere una missione sostenibile.'
+      : '',
+    why,
+    explanation: why.join(' '),
+    outcome,
+    bossDirective,
+    bossWhy,
+    primarySignal: source,
+    debuffCount: debuffs.length,
+  };
+}
+
 function isForcedRest() {
   const h = state.assessmentHistory.slice(-7);
   if (h.length<3) return false;
@@ -2668,6 +4031,7 @@ function initOnboarding() {
   // Enter
   $('onbEnter').addEventListener('click', async () => {
     state.onboardingDone = true;
+    if (!state.startHere?.startedAt) state.startHere.startedAt = new Date().toISOString();
     await saveState({ immediate: true });
     $('onboarding').classList.add('hidden');
     $('mainApp').classList.remove('hidden');
@@ -2773,6 +4137,7 @@ function processOnboarding() {
 // ========================
 
 function switchScreen(name) {
+  if (name !== 'companion') lastGuideContextScreen = name;
   currentScreen = name;
   $$('.screen').forEach(s => s.classList.remove('active'));
   const el = $('screen' + name.charAt(0).toUpperCase() + name.slice(1));
@@ -2786,6 +4151,7 @@ function switchScreen(name) {
   else if (name==='quests') renderQuests();
   else if (name==='boss') renderBossGrid();
   else if (name==='gear') renderGear();
+  else if (name==='companion') renderGuideContext();
 
   setTimeout(() => {
     syncAppChromeMetrics();
@@ -2976,6 +4342,9 @@ function maybeShowSystemPopup(trigger='passive', forcedPopup=null) {
 
 function renderStatus() {
   ensureSystemPopupLoop();
+  renderTodayCommand();
+  renderStartHereModule();
+  renderProgressLayers();
   const nm = $('playerNameLg');
   nm.textContent = state.playerName || 'HUNTER';
   nm.dataset.text = nm.textContent;
@@ -2992,63 +4361,6 @@ function renderStatus() {
   $('xpCur').textContent = rankInfo.xpIntoRank;
   $('xpNext').textContent = rankInfo.nextXp;
 
-  const guide = $('systemGuideCard');
-  if (guide) {
-    const recommendations = getProfileRecommendations();
-    guide.innerHTML = `
-      <div class="system-guide-title">COME LEGGERE IL SISTEMA</div>
-      <div class="system-guide-copy">Hunter Rank è il tuo livello vero e sale con quest e boss. Class Sync misura quanto la tua build è allineata alla classe scelta. Le stat mostrano la forza dei singoli attributi, con bonus da gear e set già inclusi.</div>
-      <div class="system-guide-mini">
-        <div class="system-guide-pill">Hunter Rank ${rankInfo.rank} · progressione account</div>
-        <div class="system-guide-pill">Class Sync ${getClassLevel()} · potenza specializzazione</div>
-      </div>
-      <div class="trait-reco-grid">
-        ${Object.values(recommendations).map(entry => `
-          <div class="trait-reco-card">
-            <div class="trait-reco-label">${entry.label}</div>
-            <div class="trait-reco-copy">${entry.text || 'Non ancora definito nell\'assessment.'}</div>
-            <div class="trait-reco-target">${entry.quest ? `${entry.quest.icon} Quest: ${entry.quest.name}` : 'Quest: in attesa di dati'}</div>
-            <div class="trait-reco-target">${entry.boss ? `${entry.boss.icon} Boss: ${entry.boss.name}` : 'Boss: nessun target disponibile'}</div>
-          </div>`).join('')}
-      </div>`;
-  }
-
-  // Primary stats
-  const priEl = $('statsPrimary');
-  priEl.innerHTML = PRIMARY_STATS.map(s => {
-    const lv = getStatLv(s.id);
-    const bonus = getEquipmentBonusForStat(s.id);
-    const shownLv = lv + bonus;
-    const xpN = xpForLevel(lv+1);
-    const xpC = state.stats[s.id]?.xp ?? 0;
-    const pct = Math.min((xpC/Math.max(xpN,1))*100, 100);
-    return `<div class="stat-row">
-      <div class="stat-icon">${s.icon}</div>
-      <div class="stat-info">
-        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${shownLv}${bonus ? ` (+${bonus})` : ''}</span></div>
-        <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%;background:${s.color}"></div></div>
-      </div>
-    </div>`;
-  }).join('');
-
-  // Secondary stats
-  const secEl = $('statsSecondary');
-  secEl.innerHTML = SECONDARY_STATS.map(s => {
-    const lv = getStatLv(s.id);
-    const bonus = getEquipmentBonusForStat(s.id);
-    const shownLv = lv + bonus;
-    const xpN = xpForLevel(lv+1);
-    const xpC = state.stats[s.id]?.xp ?? 0;
-    const pct = Math.min((xpC/Math.max(xpN,1))*100, 100);
-    return `<div class="stat-row">
-      <div class="stat-icon">${s.icon}</div>
-      <div class="stat-info">
-        <div class="stat-name"><span class="stat-name-txt">${s.name}</span><span class="stat-lv" style="color:${s.color}">LV.${shownLv}${bonus ? ` (+${bonus})` : ''}</span></div>
-        <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%;background:${s.color}"></div></div>
-      </div>
-    </div>`;
-  }).join('');
-
   // Debuffs
   const debEl = $('debuffsList');
   if (state.activeDebuffs.length === 0) {
@@ -3058,12 +4370,6 @@ function renderStatus() {
       `<div class="debuff-card active-d">${d.icon} ${d.name}</div>`
     ).join('');
   }
-
-  // Mini grid
-  $('streakV').textContent = state.currentStreak;
-  $('totalXpV').textContent = state.totalXP;
-  $('questsDoneV').textContent = state.questsCompleted;
-  $('bossKillsV').textContent = state.bossesDefeated.length;
 
   // Active Buffs
   const buffsEl = $('statusBuffs');
@@ -3079,32 +4385,46 @@ function renderStatus() {
       }).join('');
     }
   }
+}
 
-  // Faction Reputation
-  const facEl = $('statusFactions');
-  if (facEl) {
-    facEl.innerHTML = FACTION_DEFINITIONS.map(f => {
-      const rep = state.factionRep?.[f.id] ?? 0;
-      const rank = getFactionRank(f.id);
-      const nextRank = FACTION_RANKS.find(r => r.rep > rep);
-      const pct = nextRank ? Math.min((rep / nextRank.rep) * 100, 100) : 100;
-      return `<div class="faction-row">
-        <div class="faction-head"><span>${f.icon} ${f.name}</span><span class="faction-rank" style="color:${f.color}">${rank.name}</span></div>
-        <div class="faction-bar-wrap"><div class="faction-bar-fill" style="width:${pct}%;background:${f.color}"></div></div>
-        <div class="faction-rep">${rep} REP ${nextRank ? `/ ${nextRank.rep}` : '(MAX)'} — x${rank.mult} XP</div>
-      </div>`;
-    }).join('');
-  }
+function renderStatRows(statDefs) {
+  return statDefs.map(stat => {
+    const level = getStatLv(stat.id);
+    const bonus = getEquipmentBonusForStat(stat.id);
+    const shownLevel = level + bonus;
+    const xpNext = xpForLevel(level + 1);
+    const xpCurrent = state.stats[stat.id]?.xp ?? 0;
+    const pct = Math.min((xpCurrent / Math.max(xpNext, 1)) * 100, 100);
+    return `<div class="stat-row">
+      <div class="stat-icon">${stat.icon}</div>
+      <div class="stat-info">
+        <div class="stat-name"><span class="stat-name-txt">${stat.name}</span><span class="stat-lv" style="color:${stat.color}">LV.${shownLevel}${bonus ? ` (+${bonus})` : ''}</span></div>
+        <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%;background:${stat.color}"></div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
 
-  // Achievements
-  const achEl = $('statusAchievements');
-  if (achEl) {
-    const unlocked = state.achievements || [];
-    achEl.innerHTML = ACHIEVEMENT_DEFINITIONS.map(a => {
-      const done = unlocked.includes(a.id);
-      return `<div class="ach-badge ${done?'ach-done':'ach-locked'}" title="${a.desc}">${a.icon}<span class="ach-name">${a.name}</span></div>`;
-    }).join('');
-  }
+function renderFactionProgressRows() {
+  return FACTION_DEFINITIONS.map(faction => {
+    const rep = state.factionRep?.[faction.id] ?? 0;
+    const rank = getFactionRank(faction.id);
+    const nextRank = FACTION_RANKS.find(entry => entry.rep > rep);
+    const pct = nextRank ? Math.min((rep / nextRank.rep) * 100, 100) : 100;
+    return `<div class="faction-row">
+      <div class="faction-head"><span>${faction.icon} ${faction.name}</span><span class="faction-rank" style="color:${faction.color}">${rank.name}</span></div>
+      <div class="faction-bar-wrap"><div class="faction-bar-fill" style="width:${pct}%;background:${faction.color}"></div></div>
+      <div class="faction-rep">${rep} REP ${nextRank ? `/ ${nextRank.rep}` : '(MAX)'} — x${rank.mult} XP</div>
+    </div>`;
+  }).join('');
+}
+
+function renderAchievementBadges() {
+  const unlocked = state.achievements || [];
+  return ACHIEVEMENT_DEFINITIONS.map(achievement => {
+    const done = unlocked.includes(achievement.id);
+    return `<div class="ach-badge ${done ? 'ach-done' : 'ach-locked'}" title="${achievement.desc}">${achievement.icon}<span class="ach-name">${achievement.name}</span></div>`;
+  }).join('');
 }
 
 function renderProfile() {
@@ -3113,9 +4433,20 @@ function renderProfile() {
   const titleGrid = $('profileTitleGrid');
   const recGrid = $('profileRecommendations');
   const summary = $('profileSummary');
+  const primaryStats = $('profileStatsPrimary');
+  const secondaryStats = $('profileStatsSecondary');
+  const factionGrid = $('profileFactions');
+  const achievementGrid = $('profileAchievements');
   const avatar = getAvatarConfig();
   const recommendations = getProfileRecommendations();
   const titles = getSelectableTitles();
+  const classDef = CLASS_DEFINITIONS.find(c => c.id === state.playerClass);
+  const topStats = [...PRIMARY_STATS]
+    .sort((left, right) => getEffectiveStatLv(right.id) - getEffectiveStatLv(left.id))
+    .slice(0, 3)
+    .map(stat => `${stat.icon} ${stat.name} LV.${getEffectiveStatLv(stat.id)}`)
+    .join(' · ');
+  const leadFaction = getLeadFactionProgress();
 
   summary.innerHTML = `
     <div class="profile-summary-card">
@@ -3123,15 +4454,22 @@ function renderProfile() {
         <div class="profile-avatar-large" style="background:linear-gradient(135deg, ${avatar.color}, #0a1020)">${avatar.emoji}</div>
         <div>
           <div class="profile-summary-name">${state.playerName || 'Hunter'}</div>
-          <div class="profile-summary-meta">${getTitle()} · Hunter Rank ${getTotalLevel()} · Class Sync ${getClassLevel()}</div>
+          <div class="profile-summary-meta">${getTitle()} · Hunter Rank ${getTotalLevel()} · Class Sync ${getClassLevel()}${classDef ? ` · ${classDef.icon} ${classDef.name}` : ''}</div>
         </div>
       </div>
       <div class="profile-trait-stack">
         <div class="profile-trait-line"><strong>Punti forti:</strong> ${state.profileStrengths || 'Non definiti'}</div>
         <div class="profile-trait-line"><strong>Punti deboli:</strong> ${state.profileWeaknesses || 'Non definiti'}</div>
         <div class="profile-trait-line"><strong>Paure:</strong> ${state.profileFears || 'Non definite'}</div>
+        <div class="profile-trait-line"><strong>Build dominante:</strong> ${topStats || 'In definizione'}</div>
+        <div class="profile-trait-line"><strong>Allineamento principale:</strong> ${leadFaction ? `${leadFaction.faction.icon} ${leadFaction.faction.name} · ${leadFaction.rep} REP` : 'Nessuna fazione dominante'}</div>
       </div>
     </div>`;
+
+  primaryStats.innerHTML = renderStatRows(PRIMARY_STATS);
+  secondaryStats.innerHTML = renderStatRows(SECONDARY_STATS);
+  factionGrid.innerHTML = renderFactionProgressRows();
+  achievementGrid.innerHTML = renderAchievementBadges();
 
   titleGrid.innerHTML = `
     <button class="title-choice ${!state.activeBossTitle ? 'active' : ''}" data-title-value="">
@@ -3152,12 +4490,12 @@ function renderProfile() {
       </div>
       <div class="profile-reco-body">
         <div class="profile-reco-block">
-          <div class="profile-reco-title">Quest consigliata</div>
+          <div class="profile-reco-title">Mission target</div>
           <div class="profile-reco-copy">${entry.quest ? `${entry.quest.icon} ${entry.quest.name}` : 'Nessuna quest disponibile.'}</div>
           <div class="profile-reco-sub">${entry.quest ? entry.quest.desc : 'Completa altre missioni o assessment.'}</div>
         </div>
         <div class="profile-reco-block">
-          <div class="profile-reco-title">Boss suggerito</div>
+          <div class="profile-reco-title">Boss target</div>
           <div class="profile-reco-copy">${entry.boss ? `${entry.boss.icon} ${entry.boss.name}` : 'Nessun boss disponibile.'}</div>
           <div class="profile-reco-sub">${entry.boss ? `${entry.boss.title}. ${meetsReq(entry.boss.req) ? 'Puoi affrontarlo ora.' : `Prima alza: ${entry.boss.req.filter(req => !meetsReq([req])).map(req => `${req.stat} ${req.minLv}`).join(' · ')}`}` : 'Continua la progressione per sbloccare nuovi target.'}</div>
         </div>
@@ -3238,6 +4576,7 @@ function renderQuests() {
   else renderChainQuests();
   renderActiveBuffsBanner();
   renderComboTracker();
+  requestAnimationFrame(applyPendingQuestBoardFocus);
 }
 
 function renderDailyQuests(dailyBonus, filterFn) {
@@ -3802,13 +5141,35 @@ function awardBossTitle(boss) {
   return !alreadyOwned;
 }
 
+function getStatCodexGuide(statId) {
+  const guides = {
+    STR: { role: 'Forza di output e carico meccanico.', raisedBy: 'strength, iron_heart_forge, pull_up_gauntlet' },
+    AGI: { role: 'Velocita, precisione motoria e footwork.', raisedBy: 'sprint_intervals, stalker_boots_run, vestibular' },
+    INT: { role: 'Analisi, pattern recognition e problem solving.', raisedBy: 'deep_work, monarch_helm_scan, strategic_reading' },
+    VIT: { role: 'Recupero, disponibilita energetica e tenuta di base.', raisedBy: 'crimson_flask_brew, cardio_hiit, endurance_run' },
+    CHA: { role: 'Presenza, chiarezza sociale e leadership percepita.', raisedBy: 'social_exposure, lucid_ring_alpha, public_speaking' },
+    WIL: { role: 'Volonta, stabilita sotto attrito e continuita.', raisedBy: 'meditation, shadow_recurve_trial, core_bind_belt' },
+    VAG: { role: 'Freno vagale e recupero autonomico.', raisedBy: 'vagal_reset, vagal_amulet_recovery, azure_flask_sync' },
+    CO2: { role: 'Tolleranza respiratoria e calma sotto pressione.', raisedBy: 'box_breathing, co2_loop_dive, cold_exposure' },
+    FOC: { role: 'Focus sostenuto e resistenza alle distrazioni.', raisedBy: 'deep_work, quiver_zero_protocol, azure_flask_sync' },
+    DIS: { role: 'Disciplina esecutiva e chiusura dei task.', raisedBy: 'quiver_zero_protocol, deep_work, perfection routing' },
+    EMP: { role: 'Regolazione relazionale e lettura degli altri.', raisedBy: 'empathy_training, vagal_amulet_recovery, social_exposure' },
+    LEA: { role: 'Guida, responsabilita e impatto sul gruppo.', raisedBy: 'public_speaking, social_exposure, leadership loops' },
+    RES: { role: 'Resilienza al carico e resistenza generale.', raisedBy: 'iron_heart_forge, cardio_hiit, endurance_run' },
+    ADA: { role: 'Adattamento rapido e flessibilita strategica.', raisedBy: 'creative_block, stalker_boots_run, sprint_intervals' },
+    RSL: { role: 'Recupero mentale e ritorno allo stato utile.', raisedBy: 'meditation, crimson_flask_brew, vagal_reset' },
+    CRE: { role: 'Divergenza, immaginazione e soluzioni nuove.', raisedBy: 'creative_block, strategic_reading, memory_palace' },
+  };
+  return guides[statId] || { role: 'Stat di supporto alla build.', raisedBy: 'Quest coerenti con la categoria della stat' };
+}
+
 const CODEX_TAB_DEFS = [
-  { id:'rank', label:'RANK' },
-  { id:'stats', label:'STATS' },
-  { id:'boss', label:'BOSS' },
-  { id:'drop', label:'DROP RATE' },
-  { id:'set', label:'SET BONUS' },
-  { id:'legacy', label:'LEGACY 100' },
+  { id:'system', label:'SYSTEM' },
+  { id:'stats', label:'STAT RULES' },
+  { id:'boss', label:'BOSS RULES' },
+  { id:'loot', label:'LOOT FLOW' },
+  { id:'set', label:'SET & FORGE' },
+  { id:'legacy', label:'LEGACY' },
 ];
 
 function renderCodex() {
@@ -3816,156 +5177,116 @@ function renderCodex() {
   const contentEl = $('codexContent');
   if (!tabsEl || !contentEl) return;
 
-  const activeTab = state.codexTab || 'rank';
-  const rankInfo = getHunterRankInfo();
-  const playerClass = CLASS_DEFINITIONS.find(c => c.id === state.playerClass);
-  const allStats = [...PRIMARY_STATS, ...SECONDARY_STATS];
-  const effectiveStats = allStats
-    .map(stat => ({
-      ...stat,
-      base: getStatLv(stat.id),
-      bonus: getEquipmentBonusForStat(stat.id),
-      total: getEffectiveStatLv(stat.id),
-    }))
-    .sort((a, b) => b.total - a.total);
-  const setCounts = getEquippedSetCounts();
+  const activeTab = CODEX_TAB_DEFS.some(tab => tab.id === state.codexTab) ? state.codexTab : 'system';
   const guideCards = `
     <div class="codex-card">
-      <div class="codex-card-title">COME LEGGERE NEURO-LEVELING</div>
-      <div class="codex-card-copy"><strong>Hunter Rank</strong> è il livello vero dell'account. <strong>Class Sync</strong> misura quanto la tua build segue la classe. Le <strong>quest</strong> alzano stat e rank. <strong>Boss</strong>, <strong>gear</strong>, <strong>set</strong> e <strong>forge</strong> moltiplicano la build.</div>
+      <div class="codex-card-title">COME ORIENTARTI NEL SISTEMA</div>
+      <div class="codex-card-copy"><strong>Status</strong> serve per decidere cosa fare oggi. <strong>Profile</strong> serve per leggere chi sei, come stai costruendo la build e quali target hai. <strong>Codex</strong> spiega le regole. <strong>Guide</strong> ti aiuta a usare tutto questo nel momento giusto.</div>
       <div class="codex-chip-list">
-        <span class="codex-chip">1. Scan con Assessment</span>
-        <span class="codex-chip">2. Scegli la difficoltà</span>
-        <span class="codex-chip">3. Completa checklist missione</span>
-        <span class="codex-chip">4. Raccogli XP, materiali e drop</span>
+        <span class="codex-chip">Status = oggi</span>
+        <span class="codex-chip">Profile = build</span>
+        <span class="codex-chip">Codex = regole</span>
+        <span class="codex-chip">Guide = supporto</span>
       </div>
     </div>
     <div class="codex-card">
-      <div class="codex-card-title">GEAR FLOW</div>
-      <div class="codex-card-copy">Le Special Quest sbloccano pezzi o varianti dello stesso slot. I materiali servono per la forge +1/+2/+3. I boss rilasciano drop unici e upgrade permanenti ai set.</div>
+      <div class="codex-card-title">FLOW BASE DEL GIOCO</div>
+      <div class="codex-card-copy">Fai lo scan, scegli la missione, chiudi la checklist, raccogli XP, materiali e possibili drop. Quando la build sale, entri in quest speciali, boss, forge e set bonus.</div>
     </div>`;
 
   const codexPages = {
-    rank: `
+    system: `
       ${guideCards}
       <div class="codex-card">
         <div class="codex-card-title">RANK PROTOCOL</div>
-        <div class="codex-card-copy">Hunter Rank è il livello globale del profilo. Parte dall'assessment iniziale e poi sale solo con quest, boss, gear e drop. Class Sync misura invece quanto la tua classe è allineata alla build attuale.</div>
+        <div class="codex-card-copy">Hunter Rank è il livello globale dell'account. Parte dalla build iniziale e poi cresce solo con output reale: quest chiuse, boss sconfitti, reward raccolte e progressione equip. Class Sync misura quanto la tua build attuale assomiglia alla classe assegnata.</div>
         <div class="codex-chip-list">
-          <span class="codex-chip">Hunter Rank ${rankInfo.rank}</span>
-          <span class="codex-chip">Class Sync ${getClassLevel()}</span>
-          <span class="codex-chip">Titolo ${getTitle()}</span>
-          <span class="codex-chip">Streak ${state.currentStreak}</span>
+          <span class="codex-chip">Assessment apre la build</span>
+          <span class="codex-chip">Quest alzano stat e rank</span>
+          <span class="codex-chip">Boss sbloccano reward rare</span>
+          <span class="codex-chip">Gear moltiplica la build</span>
         </div>
       </div>
       <div class="codex-card">
-        <div class="codex-card-title">BUILD STATUS</div>
+        <div class="codex-card-title">LOOP DI PROGRESSIONE</div>
         <div class="codex-list">
           <div class="codex-row">
             <div>
-              <div class="codex-row-title">Classe attuale</div>
-              <div class="codex-row-copy">${playerClass ? `${playerClass.icon} ${playerClass.name} · ${playerClass.desc}` : 'Classe non assegnata.'}</div>
+              <div class="codex-row-title">Daily loop</div>
+              <div class="codex-row-copy">Assessment, missione consigliata, completamento checklist e raccolta reward.</div>
             </div>
-            <div class="codex-chip">Sync ${getClassLevel()}</div>
+            <div class="codex-chip">OPS</div>
           </div>
           <div class="codex-row">
             <div>
-              <div class="codex-row-title">Progressione del rank</div>
-              <div class="codex-row-copy">${rankInfo.nextXp > 0 ? `${rankInfo.xpIntoRank} / ${rankInfo.nextXp} XP nel rank corrente.` : 'Rank massimo raggiunto.'}</div>
-            </div>
-            <div class="codex-chip">XP ${state.totalXP}</div>
-          </div>
-          <div class="codex-row">
-            <div>
-              <div class="codex-row-title">Gear power</div>
-              <div class="codex-row-copy">Include bonus item, set attivi e upgrade permanenti ottenuti dai boss.</div>
-            </div>
-            <div class="codex-chip">+${getTotalGearPower()}</div>
-          </div>
-        </div>
-      </div>
-      <div class="codex-card">
-        <div class="codex-card-title">PROFILO HUNTER</div>
-        <div class="codex-list">
-          <div class="codex-row">
-            <div>
-              <div class="codex-row-title">Punti forti</div>
-              <div class="codex-row-copy">${state.profileStrengths || 'Non ancora definiti.'}</div>
+              <div class="codex-row-title">Build loop</div>
+              <div class="codex-row-copy">Stat, titoli, fazioni, gear e set bonus cambiano il valore reale della build.</div>
             </div>
             <div class="codex-chip">BUILD</div>
           </div>
           <div class="codex-row">
             <div>
-              <div class="codex-row-title">Punti deboli</div>
-              <div class="codex-row-copy">${state.profileWeaknesses || 'Nessuna debolezza registrata.'}</div>
+              <div class="codex-row-title">Endgame loop</div>
+              <div class="codex-row-copy">Boss, drop unici, forge e Legacy trasformano la progressione da giornaliera a lunga durata.</div>
             </div>
-            <div class="codex-chip">RISK</div>
-          </div>
-          <div class="codex-row">
-            <div>
-              <div class="codex-row-title">Paure da spezzare</div>
-              <div class="codex-row-copy">${state.profileFears || 'Nessuna paura registrata.'}</div>
-            </div>
-            <div class="codex-chip">BOSS</div>
-          </div>
-          <div class="codex-row">
-            <div>
-              <div class="codex-row-title">Titoli sbloccati</div>
-              <div class="codex-row-copy">${(state.bossTitles || []).length ? state.bossTitles.join(' · ') : 'Per ora usi solo i titoli di Rank.'}</div>
-            </div>
-            <div class="codex-chip">${(state.bossTitles || []).length}</div>
+            <div class="codex-chip">ENDGAME</div>
           </div>
         </div>
       </div>`,
     stats: `
       <div class="codex-card">
-        <div class="codex-card-title">STAT MATRIX</div>
-        <div class="codex-card-copy">Valori effettivi già comprensivi di equipaggiamento, set bonus e forge levels.</div>
+        <div class="codex-card-title">STAT RULES</div>
+        <div class="codex-card-copy">Le stat definiscono il tipo di output che la build riesce a reggere. Le Primary descrivono l'identità del personaggio. Le Secondary modulano controllo, recupero e precisione.</div>
         <div class="codex-list">
-          ${effectiveStats.map(stat => `
+          ${[...PRIMARY_STATS, ...SECONDARY_STATS].map(stat => {
+            const guide = getStatCodexGuide(stat.id);
+            return `
             <div class="codex-row">
               <div>
                 <div class="codex-row-title">${stat.icon} ${stat.name}</div>
-                <div class="codex-row-copy">Base ${stat.base}${stat.bonus ? ` · bonus gear/set +${stat.bonus}` : ''}</div>
+                <div class="codex-row-copy">${guide.role}</div>
+                <div class="codex-chip-list"><span class="codex-chip">Alza con ${guide.raisedBy}</span></div>
               </div>
-              <div class="codex-chip">LV ${stat.total}</div>
-            </div>`).join('')}
+              <div class="codex-chip">${PRIMARY_STATS.some(entry => entry.id === stat.id) ? 'PRIMARY' : 'SECONDARY'}</div>
+            </div>`;
+          }).join('')}
         </div>
       </div>`,
     boss: `
       <div class="codex-card">
-        <div class="codex-card-title">BOSS INDEX</div>
+        <div class="codex-card-title">BOSS RULES</div>
+        <div class="codex-card-copy">Ogni boss rappresenta un pattern comportamentale. Lo sblocchi quando la build soddisfa i requisiti, e lo chiudi eseguendo un protocollo invece di subirlo.</div>
         <div class="codex-list">
           ${BOSS_DEFINITIONS.map(boss => {
             const bossDrop = (BOSS_DROP_TABLES[boss.id] || [])[0];
             const dropItem = bossDrop ? EQUIPMENT_CATALOG[bossDrop.itemId] : null;
             const upgrade = BOSS_SET_UPGRADES[boss.id];
-            const defeated = (state.bossesDefeated || []).includes(boss.id);
             return `
               <div class="codex-row">
                 <div>
                   <div class="codex-row-title">${boss.icon} ${boss.name}</div>
-                  <div class="codex-row-copy">${boss.title} · ${boss.emotionLabel}. ${defeated ? 'Boss sconfitto.' : `Req ${boss.req.map(req => `${req.stat} ${req.minLv}`).join(' · ')}`}</div>
+                  <div class="codex-row-copy">${boss.title} · ${boss.emotionLabel}. Requisiti: ${boss.req.map(req => `${req.stat} ${req.minLv}`).join(' · ')}.</div>
                   <div class="codex-chip-list">
                     <span class="codex-chip">Titolo ${boss.titleReward}</span>
                     ${dropItem ? `<span class="codex-chip">DROP ${dropItem.icon} ${getItemDisplayName(dropItem)}</span>` : ''}
                     ${upgrade ? `<span class="codex-chip">SET ${EQUIPMENT_SET_BONUSES[upgrade.setId]?.name || upgrade.setId} · ${Object.entries(upgrade.bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}</span>` : ''}
                   </div>
                 </div>
-                <div class="codex-chip">${defeated ? 'CLEAR' : 'LOCK/READY'}</div>
+                <div class="codex-chip">BOSS</div>
               </div>`;
           }).join('')}
         </div>
       </div>`,
-    drop: `
+    loot: `
       <div class="codex-card">
-        <div class="codex-card-title">SPECIAL QUEST LOOT TABLE</div>
+        <div class="codex-card-title">LOOT FLOW</div>
+        <div class="codex-card-copy">Le Special Quest aprono gli item di base e le loro varianti. I boss aggiungono reliquie uniche e upgrade permanenti ai set.</div>
         <div class="codex-list">
           ${SPECIAL_QUESTS.map(quest => `
             <div class="codex-row">
               <div>
                 <div class="codex-row-title">${quest.icon} ${quest.name}</div>
-                <div class="codex-row-copy">${quest.desc}</div>
+                <div class="codex-row-copy">${quest.desc} · Req ${quest.req.map(req => `${req.stat} ${req.minLv}`).join(' · ') || 'nessuno'}</div>
                 <div class="codex-chip-list">
                   ${(SPECIAL_QUEST_LOOT_TABLES[quest.id] || [{ itemId: quest.equipmentId, weight: 100 }]).map(entry => {
                     const item = EQUIPMENT_CATALOG[entry.itemId];
@@ -3979,10 +5300,10 @@ function renderCodex() {
       </div>`,
     set: `
       <div class="codex-card">
-        <div class="codex-card-title">SET BONUS MATRIX</div>
+        <div class="codex-card-title">SET & FORGE RULES</div>
+        <div class="codex-card-copy">I set concedono bonus a soglia. La forge alza il valore dei singoli item. I boss possono aggiungere bonus permanenti extra allo stesso set.</div>
         <div class="codex-list">
           ${Object.entries(EQUIPMENT_SET_BONUSES).map(([setId, setDef]) => {
-            const upgrades = state.setUpgrades?.[setId] || {};
             const material = MATERIAL_CATALOG[SET_PRIMARY_MATERIAL[setId]];
             return `
               <div class="codex-row">
@@ -3990,12 +5311,11 @@ function renderCodex() {
                   <div class="codex-row-title">${setDef.icon} ${setDef.name}</div>
                   <div class="codex-row-copy">${Object.entries(setDef.thresholds).map(([threshold, stats]) => `${threshold}p: ${Object.entries(stats).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}`).join(' | ')}</div>
                   <div class="codex-chip-list">
-                    <span class="codex-chip">Equip ${setCounts[setId] || 0}/4</span>
                     <span class="codex-chip">Forge ${material?.icon || '✦'} ${material?.name || 'Materiale'}</span>
-                    ${Object.keys(upgrades).length ? `<span class="codex-chip">Boss upgrade ${Object.entries(upgrades).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}</span>` : ''}
+                    <span class="codex-chip">Boss upgrade possibili</span>
                   </div>
                 </div>
-                <div class="codex-chip">${(setCounts[setId] || 0) >= 4 ? 'FULL SET' : 'PARTIAL'}</div>
+                <div class="codex-chip">SET</div>
               </div>`;
           }).join('')}
         </div>
@@ -4023,7 +5343,7 @@ function renderCodex() {
   };
 
   tabsEl.innerHTML = CODEX_TAB_DEFS.map(tab => `<button class="codex-tab ${tab.id === activeTab ? 'active' : ''}" data-codex-tab="${tab.id}">${tab.label}</button>`).join('');
-  contentEl.innerHTML = codexPages[activeTab] || codexPages.rank;
+  contentEl.innerHTML = codexPages[activeTab] || codexPages.system;
 
   tabsEl.querySelectorAll('[data-codex-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -4046,32 +5366,64 @@ function renderCodex() {
 function renderGear() {
   const powerEl = $('gearPowerValue');
   const descEl = $('gearPowerDesc');
+  const unlockFeatureEl = $('gearUnlockFeature');
+  const unlockPreviewEl = $('gearUnlockPreviewList');
   const blueprintEl = $('gearBlueprintList');
   const setListEl = $('gearSetList');
   const materialsEl = $('gearMaterialsList');
   const slotsEl = $('gearSlotsGrid');
   const inventoryEl = $('gearInventoryList');
   const consumablesEl = $('gearConsumablesList');
-  if (!powerEl || !descEl || !blueprintEl || !setListEl || !materialsEl || !slotsEl || !inventoryEl || !consumablesEl) return;
+  if (!powerEl || !descEl || !unlockFeatureEl || !unlockPreviewEl || !blueprintEl || !setListEl || !materialsEl || !slotsEl || !inventoryEl || !consumablesEl) return;
 
   const totalPower = getTotalGearPower();
   const equippedCount = Object.values(state.equippedGear || {}).filter(Boolean).length;
+  const unlockPreviewEntries = getItemUnlockPreviewEntries(3);
+  const closestUnlock = unlockPreviewEntries[0] || null;
   powerEl.textContent = `+${totalPower}`;
   descEl.textContent = totalPower
     ? `${equippedCount}/${EQUIPMENT_SLOTS.length} slot attivi. Bonus item e set gia applicati ai requisiti e ai livelli mostrati.`
-    : 'Completa le quest speciali per riempire il loadout e sbloccare bonus progressivi di set.';
+    : closestUnlock
+      ? `Armory attiva ma ancora in avvio. Il prossimo reward e ${closestUnlock.item.icon} ${closestUnlock.item.name}: avanzamento ${closestUnlock.progressPct}%.`
+      : 'Completa le quest speciali per riempire il loadout e sbloccare bonus progressivi di set.';
+
+  unlockFeatureEl.innerHTML = renderGearUnlockFeature(closestUnlock);
+  unlockPreviewEl.innerHTML = unlockPreviewEntries.length ? unlockPreviewEntries.map(entry => {
+    const best = entry.bestSource;
+    const statusLabel = best.ready ? 'READY FOR RAID' : entry.nearUnlock ? 'NEAR UNLOCK' : 'IN PROGRESS';
+    return `
+      <article class="gear-unlock-card gear-linked-preview ${entry.nearUnlock ? 'near-unlock' : ''}" data-armory-quest-id="${best.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(best.questName)} nel Quest Board">
+        <div class="gear-unlock-card-top">
+          <div class="gear-item-head">
+            <div class="gear-item-icon">${entry.item.icon}</div>
+            <div>
+              <div class="gear-item-name">${escapeHtml(entry.item.name)}</div>
+              <div class="gear-item-rarity ${getGearRarityClass(entry.item.rarity)}">${entry.item.rarity} · ${escapeHtml(EQUIPMENT_SLOT_LABELS[entry.item.slot])}</div>
+            </div>
+          </div>
+          <div class="gear-unlock-status">${statusLabel}</div>
+        </div>
+        <div class="gear-unlock-track"><span style="width:${entry.progressPct}%"></span></div>
+        <div class="gear-unlock-progress-label">${entry.progressPct}% verso il drop</div>
+        ${renderArmorySourceLine(entry, 'compact')}
+        <div class="gear-unlock-contrib">Missioni collegate: ${entry.sourceMissions.map(source => escapeHtml(source)).join(' · ')}</div>
+        <div class="gear-unlock-missing">${escapeHtml(entry.missingSummary)}</div>
+      </article>`;
+  }).join('') : '<div class="gear-empty-state">Tutti i preview mission-based sono gia stati riscattati. Ora la crescita passa da forge, boss drop e set upgrade.</div>';
 
   blueprintEl.innerHTML = EQUIPMENT_SLOTS.map(slot => {
     const equippedItem = getEquippedItem(slot);
     const sourceQuests = getSlotBlueprintQuests(slot);
+    const slotPreview = getSlotUnlockPreview(slot, unlockPreviewEntries);
     const sourceText = sourceQuests.length
       ? sourceQuests.map(quest => `${quest.icon} ${quest.name}`).join(' · ')
       : 'Slot alimentato da boss drop o varianti avanzate.';
     return `
-      <div class="gear-blueprint-card ${equippedItem ? 'active' : ''}">
+      <div class="gear-blueprint-card ${equippedItem ? 'active' : ''} ${!equippedItem && slotPreview ? 'gear-linked-preview' : ''}" ${!equippedItem && slotPreview ? `data-armory-quest-id="${slotPreview.bestSource.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(slotPreview.bestSource.questName)} nel Quest Board"` : ''}>
         <div class="gear-blueprint-slot">${EQUIPMENT_SLOT_LABELS[slot]}</div>
-        <div class="gear-blueprint-state">${equippedItem ? `${equippedItem.icon} ${getItemDisplayName(equippedItem)}` : 'Slot vuoto'}</div>
-        <div class="gear-blueprint-source">${sourceText}</div>
+        <div class="gear-blueprint-state">${equippedItem ? `${equippedItem.icon} ${getItemDisplayName(equippedItem)}` : slotPreview ? `${slotPreview.item.icon} ${slotPreview.item.name}` : 'Slot vuoto'}</div>
+        <div class="gear-blueprint-source">${equippedItem ? sourceText : slotPreview ? `Prossimo target ${slotPreview.progressPct}% · ${slotPreview.bestSource.questIcon} ${slotPreview.bestSource.questName}` : sourceText}</div>
+        ${!equippedItem && slotPreview ? renderArmorySourceLine(slotPreview, 'compact') : ''}
       </div>`;
   }).join('');
 
@@ -4105,6 +5457,7 @@ function renderGear() {
 
   slotsEl.innerHTML = EQUIPMENT_SLOTS.map(slot => {
     const item = getEquippedItem(slot);
+    const slotPreview = getSlotUnlockPreview(slot, unlockPreviewEntries);
     const itemBonuses = getItemBonuses(item);
     const upgradeLevel = item ? getItemUpgradeLevel(item.id) : 0;
     const bonuses = item
@@ -4125,7 +5478,17 @@ function renderGear() {
           <div class="gear-item-bonuses">${bonuses}</div>
           <div class="gear-slot-meta">${EQUIPMENT_SET_BONUSES[item.set]?.icon || '✦'} ${EQUIPMENT_SET_BONUSES[item.set]?.name || 'Set libero'}${upgradeLevel ? ` · FORGE +${upgradeLevel}` : ''}</div>
           <button class="btn ghost" data-unequip-slot="${slot}">Rimuovi</button>` : `
-            <div class="gear-slot-empty">Slot vuoto. ${getSlotBlueprintQuests(slot).length ? `Farmalo con ${getSlotBlueprintQuests(slot).map(quest => quest.name).join(' / ')}.` : 'Continua con special quest e boss avanzati per sbloccarlo.'}</div>`}
+            <div class="gear-slot-empty ${slotPreview?.nearUnlock ? 'near-unlock' : ''} ${slotPreview ? 'gear-linked-preview' : ''}" ${slotPreview ? `data-armory-quest-id="${slotPreview.bestSource.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(slotPreview.bestSource.questName)} nel Quest Board"` : ''}>
+              ${slotPreview ? `
+                <div class="gear-slot-preview-head">
+                  <strong>${slotPreview.item.icon} ${escapeHtml(slotPreview.item.name)}</strong>
+                  <span>${slotPreview.progressPct}%</span>
+                </div>
+                <div class="gear-slot-preview-track"><span style="width:${slotPreview.progressPct}%"></span></div>
+                <div class="gear-slot-preview-copy">${slotPreview.bestSource.questIcon} ${escapeHtml(slotPreview.bestSource.questName)}</div>
+                ${renderArmorySourceLine(slotPreview, 'compact')}
+              ` : `Slot vuoto. ${getSlotBlueprintQuests(slot).length ? `Farmalo con ${getSlotBlueprintQuests(slot).map(quest => quest.name).join(' / ')}.` : 'Continua con special quest e boss avanzati per sbloccarlo.'}`}
+            </div>`}
       </div>`;
   }).join('');
 
@@ -4161,7 +5524,19 @@ function renderGear() {
           <button class="btn ${equipped ? 'ghost' : ''}" data-equip-item="${item.id}">${equipped ? 'Equipaggiato' : 'Equipaggia'}</button>
         </div>
       </div>`;
-  }).join('') : '<div class="gear-empty-state">Nessun equip ottenuto. Le missioni speciali iniziano a comparire quando alzi le stat richieste.</div>';
+  }).join('') : closestUnlock ? `
+    <div class="gear-empty-state gear-empty-state-live gear-linked-preview" data-armory-quest-id="${closestUnlock.bestSource.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(closestUnlock.bestSource.questName)} nel Quest Board">
+      <div class="gear-empty-title">Il tuo primo reward reale e gia tracciato</div>
+      <div class="gear-empty-copy">Nessun arsenale ancora equipaggiato, ma il sistema ha gia agganciato il drop piu vicino per evitare uno stato morto.</div>
+      <div class="gear-slot-preview-head">
+        <strong>${closestUnlock.item.icon} ${escapeHtml(closestUnlock.item.name)}</strong>
+        <span>${closestUnlock.progressPct}%</span>
+      </div>
+      <div class="gear-slot-preview-track"><span style="width:${closestUnlock.progressPct}%"></span></div>
+      <div class="gear-empty-copy">Missione chiave: ${closestUnlock.bestSource.questIcon} ${escapeHtml(closestUnlock.bestSource.questName)}</div>
+      ${renderArmorySourceLine(closestUnlock, 'compact')}
+      <div class="gear-empty-copy">${escapeHtml(closestUnlock.missingSummary)}</div>
+    </div>` : '<div class="gear-empty-state">Nessun equip ottenuto. Le missioni speciali iniziano a comparire quando alzi le stat richieste.</div>';
 
   const flaskItems = owned.filter(item => isFlaskItem(item.id));
   consumablesEl.innerHTML = flaskItems.length ? flaskItems.map(item => {
@@ -4201,6 +5576,17 @@ function renderGear() {
   inventoryEl.querySelectorAll('[data-equip-item]').forEach(btn => btn.addEventListener('click', () => equipItem(btn.dataset.equipItem)));
   consumablesEl.querySelectorAll('[data-use-flask]').forEach(btn => btn.addEventListener('click', () => useFlask(btn.dataset.useFlask)));
   [...inventoryEl.querySelectorAll('[data-upgrade-item]'), ...consumablesEl.querySelectorAll('[data-upgrade-item]')].forEach(btn => btn.addEventListener('click', () => upgradeEquipmentItem(btn.dataset.upgradeItem)));
+  [unlockFeatureEl, unlockPreviewEl, blueprintEl, slotsEl, inventoryEl].forEach(root => {
+    root.querySelectorAll('[data-armory-quest-id]').forEach(link => {
+      const openSourceMission = () => openQuestBoardFromArmory(link.dataset.armoryQuestId);
+      link.addEventListener('click', openSourceMission);
+      link.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openSourceMission();
+      });
+    });
+  });
 
   if (_gearCooldownInterval) clearInterval(_gearCooldownInterval);
   if (currentScreen === 'gear' && flaskItems.some(item => getFlaskCooldownRemaining(item.id) > 0)) {
@@ -4246,10 +5632,13 @@ function completeWeeklyQuest(wq) {
 // ========================
 
 function renderBossGrid() {
+  $('bossListView')?.classList.add('active');
+  $('bossFightView')?.classList.remove('active');
   const g = $('bossGrid');
   g.innerHTML = BOSS_DEFINITIONS.map(b => {
     const dead = state.bossesDefeated.includes(b.id);
     const locked = !meetsReq(b.req);
+    const campaignEffects = getBossCampaignEffects(b);
     const cls = dead ? 'defeated' : (locked ? 'locked' : '');
     let stHtml;
     if (dead) stHtml = '<span class="bc-status st-dead">☠ SCONFITTO</span>';
@@ -4262,6 +5651,7 @@ function renderBossGrid() {
         <div class="bc-lv">LV. ${b.level}</div>
         <div class="bc-emotion">${b.emotionLabel || 'EMOTIONAL SIGNATURE'}</div>
         <div class="bc-quote">“${b.quote || b.desc}”</div>
+        ${campaignEffects.length ? `<div class="bc-campaign">Campaign Effects ${campaignEffects.length}</div>` : '<div class="bc-campaign empty">Base Encounter</div>'}
         ${stHtml}
       </div>`;
   }).join('');
@@ -4281,8 +5671,243 @@ function handleBossClick(bid) {
   startBossFight(boss);
 }
 
+function getBossCampaignEffects(boss) {
+  if (!boss) return [];
+  return Object.entries(BOSS_CAMPAIGN_EFFECTS).flatMap(([sourceBossId, effects]) => {
+    if (!state.bossesDefeated.includes(sourceBossId)) return [];
+    const sourceBoss = BOSS_DEFINITIONS.find(entry => entry.id === sourceBossId);
+    return (effects || [])
+      .filter(effect => effect.targetId === boss.id)
+      .map(effect => ({
+        ...effect,
+        sourceBossId,
+        sourceBoss,
+      }));
+  });
+}
+
+function getCampaignUnlocksFromVictory(bossId) {
+  const sourceBoss = BOSS_DEFINITIONS.find(boss => boss.id === bossId);
+  return (BOSS_CAMPAIGN_EFFECTS[bossId] || []).map(effect => {
+    const targetBoss = BOSS_DEFINITIONS.find(boss => boss.id === effect.targetId);
+    return {
+      ...effect,
+      sourceBoss,
+      targetBoss,
+    };
+  });
+}
+
+function buildBossEncounterProtocol(boss, effects) {
+  const durationMultiplier = effects.reduce((multiplier, effect) => multiplier * (effect.durationMult || 1), 1);
+  const protocol = boss.protocol.map((step, index) => ({
+    ...step,
+    source: 'base',
+    label: step.label || `Protocol ${index + 1}`,
+  }));
+
+  effects
+    .filter(effect => effect.protocolStep)
+    .forEach(effect => {
+      const campaignStep = {
+        label: effect.protocolStep.label || 'Campaign Branch',
+        instr: effect.protocolStep.instr,
+        dur: effect.protocolStep.dur || 60,
+        source: 'campaign',
+        sourceBossId: effect.sourceBossId,
+      };
+      const insertAfter = Math.max(0, Math.min(protocol.length, effect.protocolStep.insertAfter ?? protocol.length));
+      protocol.splice(insertAfter, 0, campaignStep);
+    });
+
+  return protocol.map((step, index) => ({
+    ...step,
+    index: index + 1,
+    dur: Math.max(30, Math.round(step.dur * durationMultiplier)),
+  }));
+}
+
+function getBossActionProfile(boss) {
+  const framework = BOSS_ACTION_FRAMEWORK[boss.id] || {};
+  const factionId = framework.factionId || null;
+  const faction = factionId ? getFactionDefinition(factionId) : null;
+  const repGain = framework.repGain || 0;
+  const campaignEffects = getBossCampaignEffects(boss);
+  const encounterProtocol = buildBossEncounterProtocol(boss, campaignEffects);
+  const damageMultiplier = 1 + campaignEffects.reduce((sum, effect) => sum + (effect.damageBonus || 0), 0);
+  const tacticalAdvantages = campaignEffects.map(effect => effect.advantage).filter(Boolean);
+  const revealedWeaknesses = campaignEffects.map(effect => effect.weaknessReveal).filter(Boolean);
+  const bonusRewards = campaignEffects.flatMap(effect => effect.bonusRewards || []);
+  const rewardBreakdown = (boss.rewards || []).map(reward => {
+    const statDef = [...PRIMARY_STATS, ...SECONDARY_STATS].find(stat => stat.id === reward.stat);
+    const effectiveXp = Math.floor(reward.xp * 1.5 * (1 + Math.min(state.currentStreak * 0.05, 0.5)));
+    return {
+      icon: statDef?.icon || '✦',
+      label: statDef?.name || reward.stat,
+      xp: effectiveXp,
+    };
+  });
+  const totalXp = rewardBreakdown.reduce((sum, reward) => sum + reward.xp, 0);
+  const dropId = (BOSS_DROP_TABLES[boss.id] || [])[0]?.itemId || null;
+  const dropItem = dropId ? EQUIPMENT_CATALOG[dropId] : null;
+  const setUpgrade = BOSS_SET_UPGRADES[boss.id] || null;
+  const setDefinition = setUpgrade ? EQUIPMENT_SET_BONUSES[setUpgrade.setId] : null;
+  const unlockEffects = [];
+
+  if (dropItem) unlockEffects.push(`${dropItem.icon || '✦'} ${dropItem.name}`);
+  if (setUpgrade) {
+    const bonusSummary = Object.entries(setUpgrade.bonuses)
+      .map(([stat, amount]) => `+${amount} ${stat}`)
+      .join(' · ');
+    unlockEffects.push(`${setDefinition?.name || setUpgrade.setId} upgrade${bonusSummary ? ` · ${bonusSummary}` : ''}`);
+  }
+  if (boss.titleReward) unlockEffects.push(`Titolo ${boss.titleReward}`);
+  if (faction && repGain > 0) unlockEffects.push(`${faction.icon || '✦'} ${faction.name} +${repGain} rep`);
+  bonusRewards.forEach(reward => {
+    const material = MATERIAL_CATALOG[reward.materialId];
+    unlockEffects.push(`${material?.icon || '✦'} ${material?.name || reward.materialId} +${reward.amount}`);
+  });
+  campaignEffects.forEach(effect => {
+    if (effect.rewardUnlock) unlockEffects.push(effect.rewardUnlock);
+  });
+
+  return {
+    trigger: framework.trigger || boss.desc,
+    signs: framework.signs || { body: [], thoughts: [], behavior: [] },
+    fastProtocol: [...(framework.fastProtocol || boss.protocol.slice(0, 3).map(step => step.instr)), ...campaignEffects.map(effect => effect.fastProtocolAdd).filter(Boolean)],
+    extendedProtocolIntro: framework.extendedProtocolIntro || 'Segui l’intera sequenza fino a chiusura del pattern.',
+    extendedProtocol: encounterProtocol,
+    encounterProtocol,
+    rewardBreakdown,
+    totalXp,
+    faction,
+    repGain,
+    dropItem,
+    setUpgrade,
+    setDefinition,
+    unlockEffects,
+    campaignEffects,
+    tacticalAdvantages,
+    revealedWeaknesses,
+    bonusRewards,
+    damageMultiplier,
+    victoryCondition: framework.victoryCondition || 'Completa l’intero protocollo e chiudi il fight senza retreat.',
+  };
+}
+
+function renderBossProtocolSections(boss) {
+  const container = $('bossProtocolSections');
+  if (!container || !boss) return;
+  const profile = getBossActionProfile(boss);
+  const signsSection = [
+    { title: 'Body', items: profile.signs.body || [] },
+    { title: 'Thoughts', items: profile.signs.thoughts || [] },
+    { title: 'Behavior', items: profile.signs.behavior || [] },
+  ].map(group => `
+    <div class="boss-signs-group">
+      <div class="boss-signs-label">${group.title}</div>
+      <ul class="boss-bullet-list">
+        ${group.items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+      </ul>
+    </div>
+  `).join('');
+  const fastProtocol = profile.fastProtocol.map((step, index) => `
+    <li>
+      <span class="boss-step-index">0${index + 1}</span>
+      <span>${escapeHtml(step)}</span>
+    </li>
+  `).join('');
+  const extendedProtocol = profile.extendedProtocol.map(step => `
+    <li class="${step.source === 'campaign' ? 'campaign-step' : ''}">
+      <span class="boss-step-index">${step.index}</span>
+      <span>
+        <strong>${escapeHtml(step.label)}</strong>
+        <small>${escapeHtml(step.instr)} · ${Math.max(1, Math.round(step.dur / 60))} min</small>
+      </span>
+    </li>
+  `).join('');
+  const rewardBreakdown = profile.rewardBreakdown.map(reward => `
+    <li>${reward.icon} ${escapeHtml(reward.label)} +${reward.xp} XP</li>
+  `).join('');
+  const unlockEffects = profile.unlockEffects.map(effect => `<li>${escapeHtml(effect)}</li>`).join('');
+  const campaignEffects = profile.campaignEffects.length ? profile.campaignEffects.map(effect => `
+    <div class="boss-campaign-card">
+      <div class="boss-campaign-head">
+        <span class="boss-campaign-type">${escapeHtml(effect.title || 'Campaign Effect')}</span>
+        <span class="boss-campaign-source">${escapeHtml(effect.sourceBoss?.icon || '☠')} ${escapeHtml(effect.sourceBoss?.name || effect.sourceBossId)}</span>
+      </div>
+      <div class="boss-campaign-copy">${escapeHtml(effect.summary || 'La campagna ha modificato questo scontro.')}</div>
+      <div class="boss-campaign-why">Perché: ${escapeHtml(effect.why || 'Una vittoria precedente ha cambiato questo encounter.')}</div>
+    </div>
+  `).join('') : '<div class="boss-campaign-empty">Nessuna vittoria precedente sta modificando questo scontro. Il protocollo e nella sua forma base.</div>';
+  const advantageItems = profile.tacticalAdvantages.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  const weaknessItems = profile.revealedWeaknesses.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+
+  container.innerHTML = `
+    <section class="boss-protocol-section boss-trigger-section">
+      <div class="boss-section-kicker">1. Trigger</div>
+      <h3>Quando appare</h3>
+      <p>${escapeHtml(profile.trigger)}</p>
+    </section>
+    <section class="boss-protocol-section boss-signs-section">
+      <div class="boss-section-kicker">2. Signs</div>
+      <h3>Segni in body, thoughts e behavior</h3>
+      <div class="boss-signs-grid">${signsSection}</div>
+    </section>
+    <section class="boss-protocol-section boss-fast-section">
+      <div class="boss-section-kicker">3. Fast Protocol</div>
+      <h3>Tre mosse immediate</h3>
+      <ol class="boss-step-list boss-step-list-fast">${fastProtocol}</ol>
+    </section>
+    <section class="boss-protocol-section boss-extended-section">
+      <div class="boss-section-kicker">4. Extended Protocol</div>
+      <h3>Sequenza completa</h3>
+      <p>${escapeHtml(profile.extendedProtocolIntro)}</p>
+      <ol class="boss-step-list">${extendedProtocol}</ol>
+    </section>
+    <section class="boss-protocol-section boss-campaign-section">
+      <div class="boss-section-kicker">5. Campaign Effects</div>
+      <h3>Come le vittorie precedenti hanno cambiato questo fight</h3>
+      <div class="boss-campaign-grid">${campaignEffects}</div>
+      ${advantageItems || weaknessItems ? `
+        <div class="boss-campaign-meta">
+          ${advantageItems ? `<div><div class="boss-reward-label">Tactical Advantages</div><ul class="boss-bullet-list">${advantageItems}</ul></div>` : ''}
+          ${weaknessItems ? `<div><div class="boss-reward-label">Hidden Weaknesses Revealed</div><ul class="boss-bullet-list">${weaknessItems}</ul></div>` : ''}
+        </div>
+      ` : ''}
+    </section>
+    <section class="boss-protocol-section boss-reward-section">
+      <div class="boss-section-kicker">6. Reward</div>
+      <h3>Cosa sblocchi vincendo</h3>
+      <div class="boss-reward-grid">
+        <div>
+          <div class="boss-reward-label">XP</div>
+          <ul class="boss-bullet-list">${rewardBreakdown}<li><strong>Totale +${profile.totalXp} XP</strong></li></ul>
+        </div>
+        <div>
+          <div class="boss-reward-label">Core Reward</div>
+          <ul class="boss-bullet-list">
+            <li>🜂 BOSS CORE x2</li>
+            ${profile.repGain > 0 && profile.faction ? `<li>${profile.faction.icon || '✦'} ${escapeHtml(profile.faction.name)} +${profile.repGain} reputation</li>` : ''}
+          </ul>
+        </div>
+        <div>
+          <div class="boss-reward-label">Unlock Effects</div>
+          <ul class="boss-bullet-list">${unlockEffects || '<li>Nessun unlock extra</li>'}</ul>
+        </div>
+      </div>
+    </section>
+    <section class="boss-protocol-section boss-victory-section">
+      <div class="boss-section-kicker">7. Victory Condition</div>
+      <h3>Quando la run conta davvero</h3>
+      <p>${escapeHtml(profile.victoryCondition)}</p>
+    </section>
+  `;
+}
+
 function startBossFight(boss) {
   activeBoss = boss;
+  const profile = getBossActionProfile(boss);
   activeBossHP = 100;
   activeBossStep = 0;
   $('bossListView').classList.remove('active');
@@ -4295,6 +5920,15 @@ function startBossFight(boss) {
   $('bossFightEmotion').textContent = boss.emotionLabel || 'EMOTIONAL SIGNATURE';
   $('bossFightLore').textContent = boss.desc;
   $('bossFightQuote').textContent = `“${boss.quote || ''}”`;
+  const banner = $('bossCampaignBanner');
+  if (banner) {
+    banner.classList.remove('hidden');
+    banner.classList.toggle('active', profile.campaignEffects.length > 0);
+    banner.innerHTML = profile.campaignEffects.length
+      ? `<div class="boss-campaign-banner-kicker">CAMPAIGN SHIFT</div><div class="boss-campaign-banner-copy">${profile.campaignEffects.length} effetti attivi da vittorie precedenti. Questo encounter ha protocollo e reward parzialmente alterati.</div>`
+      : '<div class="boss-campaign-banner-kicker">BASE ENCOUNTER</div><div class="boss-campaign-banner-copy">Nessuna vittoria precedente sta alterando questo boss. Affronti il protocollo originale.</div>';
+  }
+  renderBossProtocolSections(boss);
   updateBossHP();
   loadBossStep();
   triggerGlitch();
@@ -4307,9 +5941,10 @@ function updateBossHP() {
 
 function loadBossStep() {
   if (!activeBoss) return;
-  const step = activeBoss.protocol[activeBossStep];
+  const profile = getBossActionProfile(activeBoss);
+  const step = profile.encounterProtocol[activeBossStep];
   if (!step) return;
-  $('protocolLbl').textContent = `Step ${activeBossStep+1}/${activeBoss.protocol.length}`;
+  $('protocolLbl').textContent = `Step ${activeBossStep+1}/${profile.encounterProtocol.length}`;
   $('protocolInstr').textContent = step.instr;
   $('btnExec').disabled = false;
   $('btnExec').textContent = 'ESEGUI STEP';
@@ -4345,17 +5980,18 @@ function startTimer(total, cb) {
 
 $('btnExec').addEventListener('click', () => {
   if (!activeBoss || bossTimer) return;
-  const step = activeBoss.protocol[activeBossStep];
+  const profile = getBossActionProfile(activeBoss);
+  const step = profile.encounterProtocol[activeBossStep];
   if (!step) return;
   startTimer(step.dur, () => {
-    const dmg = 100 / activeBoss.protocol.length;
+    const dmg = (100 / profile.encounterProtocol.length) * profile.damageMultiplier;
     activeBossHP -= dmg;
     updateBossHP();
     triggerGlitch();
     if (activeBossHP <= 0) { defeatBoss(); }
     else {
       activeBossStep++;
-      if (activeBossStep < activeBoss.protocol.length) loadBossStep();
+      if (activeBossStep < profile.encounterProtocol.length) loadBossStep();
       else { activeBossHP = 0; updateBossHP(); defeatBoss(); }
     }
   });
@@ -4364,6 +6000,8 @@ $('btnExec').addEventListener('click', () => {
 $('btnRetreat').addEventListener('click', () => {
   if (bossTimer) { clearInterval(bossTimer); bossTimer = null; }
   activeBoss = null;
+  $('bossProtocolSections').innerHTML = '';
+  $('bossCampaignBanner')?.classList.add('hidden');
   $('bossFightView').dataset.bossTheme = '';
   $('bossFightSigil').textContent = '💀';
   $('bossFightView').classList.remove('active');
@@ -4374,6 +6012,7 @@ $('btnRetreat').addEventListener('click', () => {
 function defeatBoss() {
   if (!activeBoss) return;
   const boss = activeBoss;
+  const bossProfile = getBossActionProfile(boss);
   let totalXP = 0, anyLvl = false;
   for (const rew of boss.rewards) {
     const eff = Math.floor(rew.xp * 1.5 * (1+Math.min(state.currentStreak*0.05, 0.5)));
@@ -4391,6 +6030,8 @@ function defeatBoss() {
   const setUpgrade = BOSS_SET_UPGRADES[boss.id];
   if (setUpgrade) grantSetUpgrade(setUpgrade.setId, setUpgrade.bonuses, boss.name);
   awardMaterial('BOSS_CORE', 2, boss.name);
+  bossProfile.bonusRewards.forEach(reward => awardMaterial(reward.materialId, reward.amount, `${boss.name} Campaign Cache`));
+  if (bossProfile.faction && bossProfile.repGain > 0) addFactionRep(bossProfile.faction.id, bossProfile.repGain);
   saveState();
 
   // Show rewards
@@ -4402,13 +6043,21 @@ function defeatBoss() {
   const bossDropLine = bossDrop ? `<br><br><strong>DROP:</strong> ${EQUIPMENT_CATALOG[bossDrop]?.icon || '✦'} ${EQUIPMENT_CATALOG[bossDrop]?.name || bossDrop}` : '';
   const setUpgradeLine = setUpgrade ? `<br><strong>UPGRADE SET:</strong> ${EQUIPMENT_SET_BONUSES[setUpgrade.setId]?.name || setUpgrade.setId} · ${Object.entries(setUpgrade.bonuses).map(([stat, amount]) => `+${amount} ${stat}`).join(' · ')}` : '';
   const titleLine = boss.titleReward ? `<br><strong>TITOLO:</strong> ${boss.titleReward}${unlockedNewTitle ? ' · sbloccato e attivo' : ' · attivato'}` : '';
+  const factionLine = bossProfile.faction && bossProfile.repGain > 0 ? `<br><strong>REPUTATION:</strong> ${bossProfile.faction.icon || '✦'} ${bossProfile.faction.name} +${bossProfile.repGain}` : '';
+  const campaignRewardLine = bossProfile.bonusRewards.length ? `<br><strong>CAMPAIGN CACHE:</strong> ${bossProfile.bonusRewards.map(reward => {
+    const material = MATERIAL_CATALOG[reward.materialId];
+    return `${material?.icon || '✦'} ${material?.name || reward.materialId} +${reward.amount}`;
+  }).join(' · ')}` : '';
+  const campaignUnlocks = getCampaignUnlocksFromVictory(boss.id);
+  const campaignUnlockLine = campaignUnlocks.length ? `<br><br><strong>CAMPAIGN UNLOCKS:</strong><br>${campaignUnlocks.map(effect => `→ ${effect.targetBoss?.icon || '☠'} ${effect.targetBoss?.name || effect.targetId}: ${effect.summary}`).join('<br>')}` : '';
   const quoteLine = boss.quote ? `<br><br><em>“${boss.quote}”</em>` : '';
-  $('defDetail').innerHTML = `${boss.icon} ${boss.name} SCONFITTO!<br><br>${rewLines}<br><br><strong>TOTALE: +${totalXP} XP</strong>${bossDropLine}${setUpgradeLine}${titleLine}${quoteLine}`;
+  $('defDetail').innerHTML = `${boss.icon} ${boss.name} SCONFITTO!<br><br>${rewLines}<br><br><strong>TOTALE: +${totalXP} XP</strong>${bossDropLine}${setUpgradeLine}${titleLine}${factionLine}${campaignRewardLine}${campaignUnlockLine}${quoteLine}`;
   $('bossDefeatOverlay').classList.remove('hidden');
   triggerGlitch();
   showToast(`☠ ${boss.name} SCONFITTO!`, 'levelup');
   showToast(`+${totalXP} XP`, 'xp');
   if (boss.titleReward) showToast(`👑 Titolo attivo: ${boss.titleReward}`, 'success');
+  if (bossProfile.faction && bossProfile.repGain > 0) showToast(`${bossProfile.faction.icon || '✦'} ${bossProfile.faction.name} +${bossProfile.repGain} rep`, 'success');
   if (anyLvl) { showToast('LEVEL UP!','levelup'); showLevelUpOverlay(); }
 
   // Update status and check achievements
@@ -4419,6 +6068,8 @@ function defeatBoss() {
 
 $('btnDismissDef').addEventListener('click', () => {
   $('bossDefeatOverlay').classList.add('hidden');
+  $('bossProtocolSections').innerHTML = '';
+  $('bossCampaignBanner')?.classList.add('hidden');
   $('bossFightView').dataset.bossTheme = '';
   $('bossFightSigil').textContent = '💀';
   $('bossFightView').classList.remove('active');
@@ -4732,11 +6383,169 @@ let aiConfigAvatarDraft = null;
 // COMPANION CHAT
 // ========================
 
+function buildGuideContextModel() {
+  const context = lastGuideContextScreen || 'status';
+  const models = {
+    status: {
+      title: 'Guide = Tactical support',
+      copy: 'Usa questa schermata quando vuoi trasformare il Daily Command in una mossa concreta, senza rileggere tutto il sistema.',
+      explainLabel: 'Explain Status',
+      prompts: ['Leggi il mio stato di oggi e dimmi la prossima mossa', 'Spiegami perche la missione consigliata ha senso oggi', 'Dammi una versione piu semplice del piano giornaliero'],
+    },
+    profile: {
+      title: 'Guide = Build interpretation',
+      copy: 'Qui il Guide non ti ripete il profilo: ti aiuta a leggere build, identita, punti forti, debolezze e target.',
+      explainLabel: 'Explain Profile',
+      prompts: ['Leggi la mia build e dimmi dove sono piu forte', 'Quale debolezza dovrei correggere prima', 'Che boss o missione colpisce meglio il mio profilo'],
+    },
+    codex: {
+      title: 'Guide = Rule translation',
+      copy: 'Qui il Guide converte le regole del Codex in linguaggio operativo, senza farti studiare tutto da solo.',
+      explainLabel: 'Explain Codex',
+      prompts: ['Spiegami il Codex in parole semplici', 'Dimmi come funzionano davvero rank, set e gear', 'Riassumi le regole del sistema in 3 punti'],
+    },
+    quests: {
+      title: 'Guide = Mission support',
+      copy: 'Qui il Guide ti aiuta a scegliere la missione giusta, leggere la difficolta e ridurre attrito prima di partire.',
+      explainLabel: 'Explain Quest Board',
+      prompts: ['Quale missione dovrei aprire adesso', 'Che difficolta mi conviene scegliere oggi', 'Riduci questa missione a una checklist piu semplice'],
+    },
+    gear: {
+      title: 'Guide = Reward routing',
+      copy: 'Qui il Guide ti mostra come trasformare preview, materiali e set bonus nel prossimo reward reale.',
+      explainLabel: 'Explain Armory',
+      prompts: ['Qual e il prossimo item che dovrei sbloccare', 'Dimmi quali missioni accelerano il mio Armory', 'Spiegami come usare meglio set e forge'],
+    },
+    boss: {
+      title: 'Guide = Boss tactics',
+      copy: 'Qui il Guide ti aiuta a leggere trigger, protocollo, rischio e timing del prossimo fight.',
+      explainLabel: 'Explain Boss Chamber',
+      prompts: ['Quale boss ha piu senso per me adesso', 'Riassumi il protocollo del boss in 3 mosse', 'Dimmi se oggi devo affrontare o evitare un boss'],
+    },
+  };
+  return models[context] || models.status;
+}
+
+function buildGuidePageExplanation() {
+  const context = lastGuideContextScreen || 'status';
+  const latestAssessment = getLatestAssessment();
+  const classDef = CLASS_DEFINITIONS.find(entry => entry.id === state.playerClass);
+  const topStats = [...PRIMARY_STATS]
+    .sort((left, right) => getEffectiveStatLv(right.id) - getEffectiveStatLv(left.id))
+    .slice(0, 2)
+    .map(stat => `${stat.icon} ${stat.name} LV.${getEffectiveStatLv(stat.id)}`)
+    .join(' · ');
+
+  if (context === 'status') {
+    const mission = chooseRecommendedQuest('strengths') || chooseRecommendedQuest('weaknesses') || chooseRecommendedQuest('fears');
+    const lowRecovery = !latestAssessment || isForcedRest() || latestAssessment.ansState === 'SYMPATHETIC' || latestAssessment.sleep <= 4 || latestAssessment.energy <= 4;
+    const bossDirective = latestAssessment
+      ? getTodayBossDirective(latestAssessment, true, lowRecovery)
+      : { kind: 'avoid', boss: null, summary: 'Prima serve uno scan giornaliero.' };
+    return [
+      'STATUS ti dice solo cosa conta oggi: stato del sistema, prossima missione e rischio immediato.',
+      latestAssessment
+        ? `Leggi prima lo scan: ${latestAssessment.ansState}, HRV ${latestAssessment.hrv}ms, BOLT ${latestAssessment.bolt}s. Questo decide se spingere o proteggere recovery.`
+        : 'Se manca lo scan, la priorita assoluta e fare il Daily Assess prima di leggere il resto.',
+      mission
+        ? `Poi guarda la missione raccomandata: ${mission.icon} ${mission.name}. E la mossa piu utile nel breve, non un riassunto di tutto il profilo.`
+        : 'Se non c e una missione chiara, usa Status per capire quale frizione va ridotta oggi.',
+      bossDirective.boss
+        ? `${bossDirective.kind === 'engage' ? 'Infine valuta il boss da affrontare' : 'Infine nota il boss da evitare'}: ${bossDirective.boss.icon} ${bossDirective.boss.name}.`
+        : 'Finche non c e un boss utile da mostrare, Status resta centrato su scan e missione.',
+    ].join('\n\n');
+  }
+
+  if (context === 'profile') {
+    const recommendations = getProfileRecommendations();
+    return [
+      'PROFILE serve a capire chi sei nel sistema, non cosa fare nei prossimi 10 minuti.',
+      `${classDef ? `${classDef.icon} ${classDef.name}` : 'Classe non assegnata'} e ${topStats || 'build in definizione'} ti dicono dove la build e gia forte.`,
+      `Punti forti, debolezze e paure spiegano perche il sistema ti assegna certi target e non altri.`,
+      `La Targeting Matrix traduce quel profilo in missioni e boss coerenti con la tua identita attuale.`,
+    ].join('\n\n');
+  }
+
+  if (context === 'codex') {
+    const activeTab = CODEX_TAB_DEFS.some(tab => tab.id === state.codexTab) ? state.codexTab : 'system';
+    const tabLabel = CODEX_TAB_DEFS.find(tab => tab.id === activeTab)?.label || 'SYSTEM';
+    const practicalLine = {
+      system: 'Qui impari come si muove il loop generale: scan, missioni, reward, build ed endgame.',
+      stats: 'Qui impari cosa misura ogni stat e quali tipi di quest la fanno salire.',
+      boss: 'Qui impari quando un boss va letto come pattern e quali reward sistemiche produce.',
+      loot: 'Qui impari da dove arrivano item, varianti e reward mission-based.',
+      set: 'Qui impari come set, forge e upgrade boss si sommano nella build.',
+      legacy: 'Qui leggi l endgame fuori dal daily loop: obiettivi lunghi e identita futura.',
+    }[activeTab] || 'Qui il Codex ti spiega le regole del sistema in forma pratica.';
+    return [
+      `CODEX non mostra il tuo stato del momento: spiega le regole del sistema. Ora sei su ${tabLabel}.`,
+      practicalLine,
+      'Usalo quando vuoi capire come funziona una meccanica. Poi torna su Status o Profile per decidere cosa fare davvero.',
+    ].join('\n\n');
+  }
+
+  if (context === 'gear') {
+    const preview = getItemUnlockPreviewEntries(3);
+    const lead = preview[0] || null;
+    return [
+      'ARMORY serve a leggere reward reali: cosa hai equipaggiato, cosa stai per sbloccare e da dove arriva.',
+      lead
+        ? `Il blocco Next Unlock Preview mostra il reward piu vicino: ${lead.item.icon} ${lead.item.name} al ${lead.progressPct}%.`
+        : 'Se non vedi preview vicine, la build non ha ancora aperto abbastanza quest o requisiti per i prossimi item.',
+      'I set spiegano bonus a soglia. I materiali spiegano quanto manca alla forge. Gli slot vuoti non sono vuoti: indicano il prossimo target per quello spazio.',
+    ].join('\n\n');
+  }
+
+  if (context === 'boss') {
+    return [
+      'BOSS CHAMBER serve a leggere quali pattern sono pronti per essere affrontati e quali no.',
+      'La schermata del fight ti mostra trigger, segni, fast protocol, sequenza estesa, reward e vittoria reale.',
+      'Usala quando vuoi convertire un ostacolo ricorrente in un protocollo eseguibile, non in semplice lore.',
+    ].join('\n\n');
+  }
+
+  return [
+    'Questa pagina va letta come supporto contestuale, non come archivio totale del sistema.',
+    'Guarda il blocco principale, individua cosa conta ora e usa il Guide per trasformarlo in una prossima azione.',
+  ].join('\n\n');
+}
+
+function explainCurrentGuidePage() {
+  const model = buildGuideContextModel();
+  addChatMsg(model.explainLabel || 'Explain this page', 'user');
+  addChatMsg(buildGuidePageExplanation(), 'bot');
+}
+
+function renderGuideContext() {
+  const panel = $('guideContextPanel');
+  const promptRow = $('guidePromptRow');
+  if (!panel || !promptRow) return;
+  const model = buildGuideContextModel();
+  panel.innerHTML = `
+    <div class="guide-context-title">${model.title}</div>
+    <div class="guide-context-copy">${model.copy}</div>
+    <div class="guide-context-actions">
+      <button class="guide-context-btn" type="button" id="guideExplainPageBtn">${model.explainLabel || 'Explain this page'}</button>
+    </div>
+  `;
+  $('guideExplainPageBtn')?.addEventListener('click', explainCurrentGuidePage);
+  promptRow.innerHTML = model.prompts.map(prompt => `<button class="guide-prompt-chip" type="button" data-guide-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join('');
+  promptRow.querySelectorAll('[data-guide-prompt]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const input = $('chatInput');
+      if (!input) return;
+      input.value = btn.dataset.guidePrompt;
+      sendChat();
+    });
+  });
+}
+
 function initCompanion() {
   $('chatSend').addEventListener('click', sendChat);
   $('chatInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') sendChat();
   });
+  renderGuideContext();
   // AI config buttons
   const cfgBtn = $('btnAiConfig');
   if (cfgBtn) cfgBtn.addEventListener('click', openAiConfig);
@@ -4882,6 +6691,29 @@ function initAssessment() {
     if (sl && vl) sl.addEventListener('input', () => { vl.textContent = sl.value; });
   }
 
+  const closeMetricInfoPanels = (exceptMetric = null) => {
+    document.querySelectorAll('#assessForm .af-info-btn').forEach(btn => {
+      const metric = btn.dataset.metricInfo;
+      const panel = document.getElementById(`metricInfo${metric.charAt(0).toUpperCase()}${metric.slice(1)}`);
+      const isOpen = metric === exceptMetric;
+      btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      if (panel) panel.classList.toggle('hidden', !isOpen);
+    });
+  };
+
+  document.querySelectorAll('#assessForm .af-info-btn').forEach(btn => {
+    btn.addEventListener('click', event => {
+      event.stopPropagation();
+      const metric = btn.dataset.metricInfo;
+      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      closeMetricInfoPanels(expanded ? null : metric);
+    });
+  });
+
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#assessForm .af')) closeMetricInfoPanels();
+  });
+
   $('btnAssess').addEventListener('click', () => {
     const input = {
       hrv: parseInt($('inHrv').value),
@@ -4928,12 +6760,14 @@ function initAssessment() {
   $('btnReassess').addEventListener('click', () => {
     $('assessResult').classList.add('hidden');
     $('assessForm').style.display = 'block';
+    closeMetricInfoPanels();
   });
 }
 
 function renderAssessResult(input, ans, debuffs) {
   $('assessForm').style.display = 'none';
   $('assessResult').classList.remove('hidden');
+  const summary = buildAssessmentSummary(input, ans, debuffs);
 
   const badge = $('ansBadge');
   badge.textContent = ans.replace(/_/g,' ');
@@ -4941,14 +6775,73 @@ function renderAssessResult(input, ans, debuffs) {
   if (ans==='SYMPATHETIC') badge.classList.add('symp');
   else if (ans==='PARASYMPATHETIC') badge.classList.add('para');
 
+  const summaryCard = $('assessSummaryCard');
+  summaryCard.innerHTML = `
+    <div class="assess-summary-head">
+      <div>
+        <div class="assess-summary-kicker">TODAY'S RECOMMENDATION</div>
+        <h2 class="assess-summary-title">${escapeHtml(summary.systemState)}</h2>
+      </div>
+      <div class="assess-summary-intensity" style="border-color:${summary.intensityInfo.color};color:${summary.intensityInfo.color}">${summary.intensityInfo.icon} ${summary.intensityInfo.label}</div>
+    </div>
+    <div class="assess-summary-grid">
+      <div class="assess-summary-item">
+        <span>Today's system state</span>
+        <strong>${escapeHtml(summary.systemState)}</strong>
+        <small>${escapeHtml(interpretANS(ans))}</small>
+      </div>
+      <div class="assess-summary-item">
+        <span>Recommended mission type</span>
+        <strong>${escapeHtml(summary.missionType)}</strong>
+        <small>${summary.mission ? `${summary.mission.icon} ${escapeHtml(summary.mission.name)}` : 'Recovery first'}</small>
+      </div>
+      <div class="assess-summary-item">
+        <span>Recommended intensity</span>
+        <strong>${escapeHtml(summary.intensityInfo.label)}</strong>
+        <small>${summary.lowRecovery ? 'Carico abbassato per proteggere il recupero.' : 'Intensità dosata sullo stato del giorno.'}</small>
+      </div>
+      <div class="assess-summary-item">
+        <span>Recommendation logic</span>
+        <strong>${summary.primarySignal === 'strengths' ? 'Build strengths' : summary.primarySignal === 'fears' ? 'Friction reduction' : 'Recovery protection'}</strong>
+        <small>${escapeHtml(summary.explanation || 'La raccomandazione usa i segnali più rilevanti del tuo scan.')}</small>
+      </div>
+    </div>
+    <div class="assess-boss-brief ${summary.bossDirective.kind === 'engage' ? 'engage' : 'avoid'}">
+      <div class="assess-boss-brief-head">
+        <div>
+          <div class="assess-summary-kicker">BOSS DIRECTIVE</div>
+          <div class="assess-boss-brief-title">${escapeHtml(summary.bossDirective.kind === 'engage' ? 'Boss to confront today' : 'Boss to avoid today')}</div>
+        </div>
+        <div class="assess-boss-pill">${summary.bossDirective.kind === 'engage' ? 'CONFRONT' : 'AVOID'}</div>
+      </div>
+      <div class="assess-boss-target">
+        <strong>${summary.bossDirective.boss ? `${summary.bossDirective.boss.icon} ${escapeHtml(summary.bossDirective.boss.name)}` : 'No boss target'}</strong>
+        <small>${escapeHtml(summary.bossDirective.summary)}</small>
+      </div>
+      <ul class="assess-summary-list assess-boss-list">${summary.bossWhy.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+    </div>
+    ${summary.lowRecovery ? `<div class="assess-summary-risk">⚠ ${escapeHtml(summary.riskWarning)}</div>` : ''}
+    <div class="assess-summary-why">
+      <div class="assess-summary-why-label">Why this was chosen</div>
+      <ul class="assess-summary-list">${summary.why.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+    </div>
+    ${summary.outcome ? `
+      <div class="assess-summary-footer">
+        <span>Expected reward</span>
+        <strong>+${summary.outcome.totalXP} XP</strong>
+        <small>${escapeHtml(summary.outcome.itemProgress)}</small>
+      </div>
+    ` : ''}
+  `;
+
   // Metrics
   const met = $('assessMetrics');
   met.innerHTML = `
-    <div class="am-card"><div class="am-label">HRV</div><div class="am-value">${input.hrv}ms</div></div>
-    <div class="am-card"><div class="am-label">BOLT</div><div class="am-value">${input.bolt}s</div></div>
-    <div class="am-card"><div class="am-label">MOOD</div><div class="am-value">${input.mood}/10</div></div>
-    <div class="am-card"><div class="am-label">ENERGY</div><div class="am-value">${input.energy}/10</div></div>
-    <div class="am-card"><div class="am-label">SLEEP</div><div class="am-value">${input.sleep}/10</div></div>
+    <div class="am-card"><div class="am-label">HRV</div><div class="am-value">${input.hrv}ms</div><div class="am-copy">${escapeHtml(interpretHRV(input.hrv))}</div></div>
+    <div class="am-card"><div class="am-label">BOLT</div><div class="am-value">${input.bolt}s</div><div class="am-copy">${escapeHtml(interpretBOLT(input.bolt))}</div></div>
+    <div class="am-card"><div class="am-label">MOOD</div><div class="am-value">${input.mood}/10</div><div class="am-copy">${input.mood <= 4 ? 'Attrito emotivo alto.' : input.mood >= 7 ? 'Stato emotivo favorevole.' : 'Stato emotivo stabile.'}</div></div>
+    <div class="am-card"><div class="am-label">ENERGY</div><div class="am-value">${input.energy}/10</div><div class="am-copy">${input.energy <= 4 ? 'Spinta bassa: meglio task chiudibili.' : input.energy >= 7 ? 'Buona capacità di output.' : 'Energia gestibile senza forzare.'}</div></div>
+    <div class="am-card"><div class="am-label">SLEEP</div><div class="am-value">${input.sleep}/10</div><div class="am-copy">${input.sleep <= 4 ? 'Recupero ridotto.' : input.sleep >= 7 ? 'Recupero solido.' : 'Recupero discreto ma non pieno.'}</div></div>
     <div class="am-card"><div class="am-label">STREAK</div><div class="am-value">${state.currentStreak}d</div></div>`;
 
   // Rest
@@ -5019,6 +6912,17 @@ function init() {
   if (!state.bossTitles) state.bossTitles = [];
   if (!state.avatarEmoji) state.avatarEmoji = AVATAR_EMOJI_OPTIONS[0];
   if (!state.avatarColor) state.avatarColor = AVATAR_COLOR_OPTIONS[0];
+  if (!state.startHere || typeof state.startHere !== 'object') {
+    state.startHere = { startedAt: null, basicsReviewed: false, adaptiveReviewed: false, weeklyRecapReviewed: false, buildPath: null };
+  }
+  state.startHere = {
+    startedAt: state.startHere.startedAt || null,
+    basicsReviewed: !!state.startHere.basicsReviewed,
+    adaptiveReviewed: !!state.startHere.adaptiveReviewed,
+    weeklyRecapReviewed: !!state.startHere.weeklyRecapReviewed,
+    buildPath: state.startHere.buildPath || null,
+  };
+  if (state.onboardingDone && !state.startHere.startedAt) state.startHere.startedAt = new Date().toISOString();
 
   initStats();
   resetWeeklyIfNeeded();
