@@ -2097,14 +2097,19 @@ function chooseSuggestedBoss(source) {
   if (!bosses.length) return null;
 
   const scored = bosses
-    .map(boss => ({ boss, score: scoreBossAgainstSignals(boss, signals, source), ready: meetsReq(boss.req) }))
-    .sort((a, b) => Number(b.ready) - Number(a.ready) || b.score - a.score || a.boss.level - b.boss.level);
+    .map(boss => ({
+      boss,
+      score: scoreBossAgainstSignals(boss, signals, source),
+      campaignScore: getBossCampaignPriorityScore(boss, source),
+      ready: meetsReq(boss.req),
+    }))
+    .sort((a, b) => Number(b.ready) - Number(a.ready) || (b.score + b.campaignScore) - (a.score + a.campaignScore) || a.boss.level - b.boss.level);
 
-  if (scored[0]?.score > 0) return scored[0].boss;
+  if ((scored[0]?.score || 0) + (scored[0]?.campaignScore || 0) > 0) return scored[0].boss;
 
   if (source === 'strengths') return scored.find(entry => entry.ready)?.boss || scored[0].boss;
-  if (source === 'weaknesses') return bosses.find(boss => !meetsReq(boss.req)) || bosses[0];
-  return bosses.find(boss => ['ANXIETY_WRAITH','PANIC_HYDRA','SHAME_SIREN'].includes(boss.id)) || bosses[0];
+  if (source === 'weaknesses') return scored.find(entry => !entry.ready && entry.campaignScore > 0)?.boss || bosses.find(boss => !meetsReq(boss.req)) || bosses[0];
+  return scored.find(entry => entry.campaignScore > 0)?.boss || bosses.find(boss => ['ANXIETY_WRAITH','PANIC_HYDRA','SHAME_SIREN'].includes(boss.id)) || bosses[0];
 }
 
 function getProfileRecommendations() {
@@ -2287,12 +2292,80 @@ function estimateQuestOutcome(quest, mode='medium') {
   };
 }
 
+function formatAssessmentLockTime(assessment) {
+  if (!assessment?.date) return null;
+  const parsed = new Date(assessment.date);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+}
+
+function buildTodayMissionReason(scanReady, missionSource, assessment, mission, lowRecoveryWindow) {
+  if (!scanReady || !assessment || !mission) {
+    return 'Finche il Daily Scan non e valido, il sistema non promuove nessuna missione come comando affidabile.';
+  }
+  if (lowRecoveryWindow) {
+    return `Recovery prima di tutto: energia ${assessment.energy}/10 e sonno ${assessment.sleep}/10 chiedono controllo, non overload.`;
+  }
+  if (missionSource === 'fears') {
+    return `Mood basso ma finestra ancora utile: il comando di oggi converte avoidance in esposizione controllata.`;
+  }
+  if (mission.type === 'SPECIAL') {
+    return `Finestra ad alto valore confermata: i biomarcatori supportano un push che puo tradursi in gear o materiali reali.`;
+  }
+  if (missionSource === 'strengths') {
+    return 'La build e sopra soglia sui tuoi punti forti: oggi conviene spingere dove il sistema puo convertire meglio il momentum.';
+  }
+  return 'Il comando punta il tuo punto fragile piu utile: progressione concreta con attrito ancora gestibile.';
+}
+
+function buildTodayRewardExpectation(scanReady, rewardPreview, mission) {
+  if (!scanReady || !rewardPreview || !mission) {
+    return 'Reward forecast offline finche il Daily Scan non riattiva routing, mode selection e rischio.';
+  }
+  const primaryReward = rewardPreview.itemProgress || 'Nessun progresso gear diretto';
+  return `${rewardPreview.modeInfo.icon} ${rewardPreview.modeInfo.label} · +${rewardPreview.totalXP} XP attesi · ${primaryReward}.`;
+}
+
+function buildTodayScanPanel(scanReady, assessment, lowRecoveryWindow, mission, bossDirective, rewardPreview) {
+  if (!scanReady || !assessment) {
+    return {
+      panelClass: 'missing',
+      lockLabel: 'SCAN OFFLINE',
+      lockValue: 'NO VALID READ',
+      copy: 'Mission routing, boss verdict e reward expectation restano in modalita fallback finche non esegui il Daily Scan.',
+      items: [
+        { label: 'Mission Routing', value: 'LOCKED', tone: 'warning' },
+        { label: 'Boss Verdict', value: 'LOCKED', tone: 'warning' },
+        { label: 'Reward Forecast', value: 'LOCKED', tone: 'warning' },
+      ],
+    };
+  }
+
+  const recoveryState = lowRecoveryWindow ? 'CAUTION' : 'OPEN';
+  return {
+    panelClass: lowRecoveryWindow ? 'recovery' : 'live',
+    lockLabel: 'SCAN LOCKED',
+    lockValue: formatAssessmentLockTime(assessment) || 'NOW',
+    copy: lowRecoveryWindow
+      ? 'Il Daily Scan ha abbassato il profilo di rischio: oggi il control room privilegia stabilizzazione e pulizia.'
+      : 'Il Daily Scan ha attivato il control room: missione, boss e reward sono stati ricalcolati sul tuo stato reale di oggi.',
+    items: [
+      { label: 'ANS', value: assessment.ansState, tone: lowRecoveryWindow ? 'warning' : 'success' },
+      { label: 'Mission', value: mission ? mission.icon : 'N/D', tone: mission ? 'success' : 'warning' },
+      { label: 'Boss', value: bossDirective.kind === 'engage' ? 'ENGAGE' : 'CAUTION', tone: bossDirective.kind === 'engage' ? 'success' : 'warning' },
+      { label: 'Reward', value: rewardPreview ? `+${rewardPreview.totalXP} XP` : 'PENDING', tone: rewardPreview ? 'success' : 'warning' },
+      { label: 'Window', value: recoveryState, tone: lowRecoveryWindow ? 'warning' : 'success' },
+    ],
+  };
+}
+
 function getTodayBossDirective(assessment, scanReady, lowRecoveryWindow) {
   const strengthsBoss = chooseSuggestedBoss('strengths');
   const weaknessesBoss = chooseSuggestedBoss('weaknesses');
   const fearsBoss = chooseSuggestedBoss('fears');
   const engageBoss = strengthsBoss && meetsReq(strengthsBoss.req) ? strengthsBoss : null;
   const fallbackBoss = fearsBoss || weaknessesBoss || strengthsBoss || null;
+  const fallbackCampaign = getBossCampaignEffects(fallbackBoss);
 
   if (!scanReady) {
     return {
@@ -2301,39 +2374,66 @@ function getTodayBossDirective(assessment, scanReady, lowRecoveryWindow) {
       boss: fallbackBoss,
       title: 'Scan richiesto prima del raid',
       summary: 'Senza Daily Scan il sistema non valida un ingaggio boss. Prima aggiorna biomarcatori e rischio.',
+      windowLabel: 'Caution State',
+      windowTone: 'warning',
+      tacticalReason: `Boss routing offline: senza biomarcatori aggiornati il sistema non apre una engage window credibile.${fallbackCampaign.length ? ` Esiste una branch campagna su ${fallbackBoss?.icon || ''} ${fallbackBoss?.name || 'questo target'}, ma resta sospesa finché non fai il Daily Scan.` : ''}`,
+      campaignLines: fallbackCampaign.slice(0, 2).map(effect => formatCampaignEffectLine(effect)),
       ctaLabel: 'Open Boss Chamber',
     };
   }
 
   if (lowRecoveryWindow) {
     const boss = fearsBoss || weaknessesBoss || fallbackBoss;
+    const campaignEffects = getBossCampaignEffects(boss);
     return {
       kind: 'avoid',
       source: boss === fearsBoss ? 'fears' : 'weaknesses',
       boss,
       title: 'Boss da evitare oggi',
-      summary: 'Oggi il sistema privilegia recovery, controllo e progressione sicura. Evita un fight ad alto attrito.',
+      summary: campaignEffects.length
+        ? 'La campagna ha aperto vantaggi su questo boss, ma oggi il sistema privilegia recovery, controllo e progressione sicura.'
+        : 'Oggi il sistema privilegia recovery, controllo e progressione sicura. Evita un fight ad alto attrito.',
+      windowLabel: 'Caution State',
+      windowTone: 'warning',
+      tacticalReason: `Recovery fragile: il costo di ingaggio e superiore al valore atteso del pull di oggi.${campaignEffects.length ? ` La branch campagna resta viva su ${boss.icon} ${boss.name}, ma conviene preservarla per una finestra piu pulita.` : ''}`,
+      campaignLines: campaignEffects.slice(0, 2).map(effect => formatCampaignEffectLine(effect)),
       ctaLabel: 'Review Boss Risk',
     };
   }
 
   if (engageBoss) {
+    const campaignEffects = getBossCampaignEffects(engageBoss);
+    const hasSaferWindow = campaignEffects.some(effect => (effect.durationMult || 1) < 1 || !!effect.damageBonus || !!effect.advantage);
     return {
       kind: 'engage',
       source: 'strengths',
       boss: engageBoss,
-      title: 'Boss consigliato ora',
-      summary: 'Il tuo stato attuale supporta un tentativo boss. Questa e la finestra migliore per convertire momentum in progressione.',
+      title: campaignEffects.length ? 'Boss campagna consigliato ora' : 'Boss consigliato ora',
+      summary: campaignEffects.length
+        ? 'Una vittoria precedente ha alterato questo encounter. Oggi puoi convertire quel vantaggio in progressione reale.'
+        : 'Il tuo stato attuale supporta un tentativo boss. Questa e la finestra migliore per convertire momentum in progressione.',
+      windowLabel: campaignEffects.length ? (hasSaferWindow ? 'Safer Engage Window' : 'Campaign Engage') : 'Engage Window',
+      windowTone: 'success',
+      tacticalReason: `Requisiti attivi e biomarcatori puliti: il rischio è abbastanza sotto controllo per un tentativo reale.${campaignEffects.length ? ` Inoltre ${campaignEffects[0].sourceBoss?.icon || '☠'} ${campaignEffects[0].sourceBoss?.name || campaignEffects[0].sourceBossId} ha gia deformato il fight: ${campaignEffects[0].summary}` : ''}`,
+      campaignLines: campaignEffects.slice(0, 3).map(effect => formatCampaignEffectLine(effect)),
       ctaLabel: 'Open Boss Chamber',
     };
   }
+
+  const prepCampaign = getBossCampaignEffects(fallbackBoss);
 
   return {
     kind: 'avoid',
     source: fallbackBoss === fearsBoss ? 'fears' : 'weaknesses',
     boss: fallbackBoss,
     title: 'Boss da rimandare',
-    summary: 'Prima chiudi una missione mirata: servono piu livello, gear o requisiti attivi per un pull pulito.',
+    summary: prepCampaign.length
+      ? 'Hai gia una branch campagna aperta su questo fight, ma prima serve chiudere la preparazione minima.'
+      : 'Prima chiudi una missione mirata: servono piu livello, gear o requisiti attivi per un pull pulito.',
+    windowLabel: prepCampaign.length ? 'Campaign Prep Window' : 'Prep Window',
+    windowTone: 'warning',
+    tacticalReason: `Manca ancora conversione di build: oggi il boss serve piu come target da preparare che da ingaggiare.${prepCampaign.length ? ` La buona notizia e che la campagna e gia partita: ${prepCampaign[0].summary}` : ''}`,
+    campaignLines: prepCampaign.slice(0, 2).map(effect => formatCampaignEffectLine(effect)),
     ctaLabel: 'Review Boss Risk',
   };
 }
@@ -2369,10 +2469,11 @@ function buildCampaignStatusModel() {
     .map(boss => ({
       boss,
       effects: getBossCampaignEffects(boss),
+      score: getBossCampaignPriorityScore(boss, 'strengths'),
       ready: meetsReq(boss.req),
     }))
     .filter(entry => entry.effects.length > 0)
-    .sort((left, right) => Number(right.ready) - Number(left.ready) || left.boss.level - right.boss.level);
+    .sort((left, right) => Number(right.ready) - Number(left.ready) || right.score - left.score || left.boss.level - right.boss.level);
 
   if (!activeTargets.length) {
     return {
@@ -2386,12 +2487,13 @@ function buildCampaignStatusModel() {
   }
 
   const primary = activeTargets[0];
+  const leadingEffect = primary.effects[0] || null;
   return {
     title: `${primary.boss.icon} ${primary.boss.name}`,
-    copy: `${primary.effects.length} effetti campagna sono già attivi su questo encounter.${primary.ready ? ' Il fight è affrontabile ora.' : ' Serve ancora preparazione prima del pull.'}`,
+    copy: `${primary.effects.length} effetti campagna sono già attivi su questo encounter.${leadingEffect ? ` Primo shift: ${leadingEffect.summary}` : ''}${primary.ready ? ' Il fight è affrontabile ora.' : ' Serve ancora preparazione prima del pull.'}`,
     badge: primary.ready ? 'CAMPAIGN LIVE' : 'CAMPAIGN LOCKED',
     targetBoss: primary.boss,
-    effectLines: primary.effects.slice(0, 3).map(effect => `${effect.sourceBoss?.icon || '☠'} ${effect.sourceBoss?.name || effect.sourceBossId}: ${effect.summary}`),
+    effectLines: primary.effects.slice(0, 3).map(effect => formatCampaignEffectLine(effect)),
     ctaLabel: 'Review Campaign Boss',
   };
 }
@@ -2419,6 +2521,7 @@ function buildTodayCommandModel() {
   const rewardPreview = estimateQuestOutcome(mission, missionMode);
   const bossDirective = getTodayBossDirective(assessment, scanReady, lowRecoveryWindow);
   const campaign = buildCampaignStatusModel();
+  const scanPanel = buildTodayScanPanel(scanReady, assessment, lowRecoveryWindow, mission, bossDirective, rewardPreview);
 
   const stateTitle = !scanReady
     ? 'Daily Scan Required'
@@ -2432,25 +2535,51 @@ function buildTodayCommandModel() {
       : 'I segnali di oggi supportano una missione ad alto valore. Hai una finestra pulita per convertire energia in progressione.';
   const stateBadge = !scanReady ? 'SCAN MISSING' : lowRecoveryWindow ? 'RECOVERY' : 'READY';
   const stateTone = !scanReady || lowRecoveryWindow ? 'warning' : 'success';
+  const missionReason = buildTodayMissionReason(scanReady, missionSource, assessment, mission, lowRecoveryWindow);
+  const rewardExpectation = buildTodayRewardExpectation(scanReady, rewardPreview, mission);
+  const missionWindowLabel = !scanReady
+    ? 'Routing Offline'
+    : lowRecoveryWindow
+      ? 'Control Window'
+      : missionSource === 'fears'
+        ? 'Exposure Window'
+        : mission?.type === 'SPECIAL'
+          ? 'High-Value Window'
+          : 'Execution Window';
+  const missionStatusLabel = !scanReady
+    ? 'Scan missing'
+    : lowRecoveryWindow
+      ? 'Recovery-first'
+      : missionSource === 'fears'
+        ? 'Fear target'
+        : missionSource === 'strengths'
+          ? 'Strength push'
+          : 'Weakness repair';
 
   const whyRows = [
     {
-      label: 'Biomarkers',
+      label: 'Scan Readout',
       value: assessment
         ? `HRV ${assessment.hrv}ms, BOLT ${assessment.bolt}s, Sleep ${assessment.sleep}/10, Energy ${assessment.energy}/10, Mood ${assessment.mood}/10, stato ${assessment.ansState}.`
         : 'Nessun Daily Scan registrato oggi. Il sistema sta lavorando con dati incompleti.',
     },
     {
-      label: 'Build',
-      value: `${classDef ? `${classDef.icon} ${classDef.name}` : 'Hunter'} · Class Sync ${getClassLevel()} · top stat ${topStat?.name || 'N/D'} LV.${topStat ? getEffectiveStatLv(topStat.id) : 0}.`,
+      label: 'Mission Logic',
+      value: mission ? missionReason : 'Il sistema aspetta prima una lettura giornaliera valida, poi assegna una missione con priorita reale.',
     },
     {
-      label: 'Weaknesses & Fears',
-      value: `${state.profileWeaknesses ? `Weaknesses: ${state.profileWeaknesses}.` : 'Weaknesses non definite.'} ${state.profileFears ? `Fears: ${state.profileFears}.` : 'Fears non definite.'}`,
+      label: 'Boss Logic',
+      value: bossDirective.tacticalReason,
     },
     {
-      label: 'Current Progression',
-      value: `Hunter Rank ${rankInfo.rank}, streak ${state.currentStreak}, boss ${state.bossesDefeated.length}/${BOSS_DEFINITIONS.length}, gear power +${getTotalGearPower()}, punto piu fragile ${weakStat?.name || 'N/D'} LV.${weakStat ? getEffectiveStatLv(weakStat.id) : 0}.`,
+      label: 'Campaign Logic',
+      value: campaign.targetBoss
+        ? `${campaign.title}: ${campaign.effectLines[0] || campaign.copy}`
+        : 'Nessuna branch attiva ancora. Il prossimo clear boss aprira una nuova conseguenza di campagna.',
+    },
+    {
+      label: 'Progression Context',
+      value: `${classDef ? `${classDef.icon} ${classDef.name}` : 'Hunter'} · Rank ${rankInfo.rank} · top stat ${topStat?.name || 'N/D'} LV.${topStat ? getEffectiveStatLv(topStat.id) : 0} · punto fragile ${weakStat?.name || 'N/D'} LV.${weakStat ? getEffectiveStatLv(weakStat.id) : 0}.`,
     },
   ];
 
@@ -2460,9 +2589,14 @@ function buildTodayCommandModel() {
     stateCopy,
     stateBadge,
     stateTone,
+    scanPanel,
     mission,
     missionMode,
+    missionReason,
+    missionWindowLabel,
+    missionStatusLabel,
     rewardPreview,
+    rewardExpectation,
     bossDirective,
     campaign,
     whyRows,
@@ -2479,21 +2613,39 @@ function renderTodayCommand() {
   const reward = model.rewardPreview;
   const boss = model.bossDirective.boss;
   const campaign = model.campaign;
+  const scanPanel = model.scanPanel;
+
+  root.className = `today-command ${model.scanReady ? 'scan-ready' : 'scan-missing'}`;
 
   root.innerHTML = `
     <div class="today-command-head">
       <div>
         <div class="today-command-kicker">TACTICAL COMMAND CENTER</div>
         <h2 class="today-command-title">Today Command</h2>
-        <p class="today-command-sub">Una sola lettura chiara. Una sola azione prioritaria. Il resto viene dopo.</p>
+        <p class="today-command-sub">${model.scanReady ? 'Lo scan di oggi sta pilotando missione, rischio boss e valore atteso del prossimo move.' : 'Finche lo scan manca, il control room resta in fallback e il sistema non apre una vera priorita giornaliera.'}</p>
       </div>
       <div class="today-command-state ${model.stateTone}">${model.stateBadge}</div>
     </div>
     <div class="today-command-grid">
       <article class="today-card today-card-state">
-        <div class="today-card-label">System State Today</div>
+        <div class="today-card-label">Scan State Today</div>
         <div class="today-card-title">${escapeHtml(model.stateTitle)}</div>
         <p class="today-card-copy">${escapeHtml(model.stateCopy)}</p>
+        <div class="today-scan-panel ${scanPanel.panelClass}">
+          <div class="today-scan-lock">
+            <span class="today-scan-lock-label">${escapeHtml(scanPanel.lockLabel)}</span>
+            <strong>${escapeHtml(scanPanel.lockValue)}</strong>
+          </div>
+          <p class="today-scan-panel-copy">${escapeHtml(scanPanel.copy)}</p>
+          <div class="today-scan-grid">
+            ${scanPanel.items.map(item => `
+              <div class="today-scan-item ${escapeHtml(item.tone)}">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${escapeHtml(item.value)}</strong>
+              </div>
+            `).join('')}
+          </div>
+        </div>
         <div class="today-chip-row">
           <span class="today-chip">${escapeHtml(state.playerName || 'Hunter')}</span>
           <span class="today-chip">Class Sync ${getClassLevel()}</span>
@@ -2507,9 +2659,15 @@ function renderTodayCommand() {
         <div class="today-card-title">${mission ? `${mission.icon} ${escapeHtml(mission.name)}` : 'Run Daily Scan'}</div>
         <p class="today-card-copy">${mission ? escapeHtml(mission.desc) : 'Senza scan giornaliero il sistema non puo scegliere una missione affidabile. Avvia subito la lettura dei biomarcatori.'}</p>
         <div class="today-meta-row">
+          <span class="today-meta-pill ${model.scanReady ? 'success' : 'warning'}">${escapeHtml(model.missionStatusLabel)}</span>
           <span class="today-meta-pill">${mission ? `${missionMode.icon} ${missionMode.label}` : 'SCAN REQUIRED'}</span>
           <span class="today-meta-pill">${mission ? `${mission.dur} min` : 'Assessment 30 sec'}</span>
           <span class="today-meta-pill">${mission ? `${getQuestRarity(Math.max(1, mission.diff + missionMode.diffOffset))}` : 'Unlock routing'}</span>
+          <span class="today-meta-pill">${escapeHtml(model.missionWindowLabel)}</span>
+        </div>
+        <div class="today-directive-box">
+          <span class="today-directive-label">Tactical reason</span>
+          <p>${escapeHtml(model.missionReason)}</p>
         </div>
         <div class="today-cta-row">
           <button class="btn-primary full-w today-primary-cta" id="todayCommandMissionCta">${mission ? 'Start Mission' : 'Run Daily Scan'}</button>
@@ -2521,10 +2679,19 @@ function renderTodayCommand() {
         <div class="today-card-title">${boss ? `${boss.icon} ${escapeHtml(boss.name)}` : 'No boss target available'}</div>
         <p class="today-card-copy">${escapeHtml(model.bossDirective.summary)}</p>
         <div class="today-meta-row">
-          <span class="today-meta-pill ${model.bossDirective.kind === 'avoid' ? 'warning' : 'success'}">${model.bossDirective.kind === 'avoid' ? 'Avoid Window' : 'Engage Window'}</span>
+          <span class="today-meta-pill ${model.bossDirective.windowTone}">${escapeHtml(model.bossDirective.windowLabel)}</span>
           <span class="today-meta-pill">${boss ? `LV ${boss.level}` : 'No target'}</span>
           <span class="today-meta-pill">${boss && meetsReq(boss.req) ? 'Ready' : 'Prep Needed'}</span>
         </div>
+        <div class="today-directive-box ${model.bossDirective.windowTone}">
+          <span class="today-directive-label">Tactical reason</span>
+          <p>${escapeHtml(model.bossDirective.tacticalReason)}</p>
+        </div>
+        ${model.bossDirective.campaignLines?.length ? `
+          <div class="today-campaign-list today-campaign-compact">
+            ${model.bossDirective.campaignLines.map(line => `<div class="today-campaign-row">${escapeHtml(line)}</div>`).join('')}
+          </div>
+        ` : ''}
         <div class="today-cta-row">
           <button class="btn-secondary full-w" id="todayCommandBossCta">${escapeHtml(model.bossDirective.ctaLabel)}</button>
         </div>
@@ -2550,6 +2717,10 @@ function renderTodayCommand() {
 
       <article class="today-card today-card-reward">
         <div class="today-card-label">Immediate Reward</div>
+        <div class="today-directive-box ${model.scanReady ? 'success' : 'warning'}">
+          <span class="today-directive-label">If you move now</span>
+          <p>${escapeHtml(model.rewardExpectation)}</p>
+        </div>
         <div class="today-reward-grid">
           <div class="today-reward-item">
             <span class="today-reward-name">XP Preview</span>
@@ -3070,6 +3241,158 @@ function getQuestUnlockSignal(quest) {
   };
 }
 
+function getGearUnlockStatePriority(stateKey) {
+  return {
+    ready_for_drop: 4,
+    close_to_unlock: 3,
+    partial_chain_completed: 2,
+    requirements_building: 1,
+  }[stateKey] || 0;
+}
+
+function getGearUnlockProgressState(entry) {
+  const best = entry.bestSource;
+  const quest = findQuestById(best.questId);
+  const totalReqs = Math.max(quest?.req?.length || 0, best.reqProgress.missing.length || 0, 1);
+  const missingReqs = best.reqProgress.missing || [];
+  const metReqs = Math.max(0, totalReqs - missingReqs.length);
+  const readySources = entry.sources.filter(source => source.ready && !source.completed);
+  const primaryGap = missingReqs[0] || null;
+  const isCloseToUnlock = !best.ready && (!!primaryGap && missingReqs.length === 1 && primaryGap.gap <= 1 || best.pct >= 78);
+  const isPartialChain = !best.ready && metReqs > 0 && missingReqs.length > 0;
+
+  if (best.ready) {
+    const multipleRoutes = readySources.length > 1;
+    return {
+      key: 'ready_for_drop',
+      badge: 'READY FOR DROP',
+      badgeClass: 'ready',
+      statusLabel: multipleRoutes ? 'Protocol unlocked' : 'One mission left',
+      copy: multipleRoutes
+        ? `Hai ${readySources.length} rotte gia vive per cercare questo pezzo.`
+        : `Requisiti centrati. Ti resta solo chiudere ${best.questIcon} ${best.questName}.`,
+      progressLabel: multipleRoutes ? `${readySources.length} rotte aperte` : 'Requisiti centrati',
+      showTrack: false,
+      blueprintState: multipleRoutes ? 'Requirements met · protocol unlocked' : 'Requirements met · one mission left',
+      slotState: multipleRoutes ? 'Protocol unlocked' : 'One mission left',
+      missingLine: multipleRoutes
+        ? `Hai gia piu ingressi validi: scegli la rotta migliore e vai a rollare il drop.`
+        : 'Il gating stat e chiuso. Ora conta solo il clear della missione.',
+    };
+  }
+
+  if (isCloseToUnlock) {
+    return {
+      key: 'close_to_unlock',
+      badge: 'CLOSE TO UNLOCK',
+      badgeClass: 'near',
+      statusLabel: 'Close to unlock',
+      copy: primaryGap
+        ? `Ti manca solo ${primaryGap.icon} ${primaryGap.name} +${primaryGap.gap} per aprire il protocollo.`
+        : 'Sei entrato nell ultimo tratto di build verso questo item.',
+      progressLabel: primaryGap
+        ? `Ultimo gradino: ${primaryGap.current}/${primaryGap.target}`
+        : `${entry.progressPct}% di allineamento`,
+      showTrack: true,
+      blueprintState: 'Close to unlock',
+      slotState: primaryGap ? `${primaryGap.name} +${primaryGap.gap}` : 'Quasi pronto',
+      missingLine: best.reqProgress.summary,
+    };
+  }
+
+  if (isPartialChain) {
+    return {
+      key: 'partial_chain_completed',
+      badge: 'PARTIAL CHAIN',
+      badgeClass: 'partial',
+      statusLabel: 'Partial chain completed',
+      copy: `${metReqs}/${totalReqs} requisiti sono gia stabili. Il pezzo si sta aprendo in modo credibile.`,
+      progressLabel: `${metReqs}/${totalReqs} requisiti chiusi`,
+      showTrack: true,
+      blueprintState: `Partial chain · ${metReqs}/${totalReqs}`,
+      slotState: `${metReqs}/${totalReqs} requisiti`,
+      missingLine: best.reqProgress.summary,
+    };
+  }
+
+  return {
+    key: 'requirements_building',
+    badge: 'BUILD IN PROGRESS',
+    badgeClass: 'build',
+    statusLabel: 'Requirements building',
+    copy: 'Il blueprint e tracciato, ma la build deve ancora agganciare i gate giusti.',
+    progressLabel: entry.progressPct >= 40 ? `${entry.progressPct}% di allineamento` : 'Rotta tracciata',
+    showTrack: entry.progressPct >= 40,
+    blueprintState: 'Blueprint traced',
+    slotState: 'Blueprint traced',
+    missingLine: best.reqProgress.summary,
+  };
+}
+
+function getMissingUpgradeMaterials(costs) {
+  return Object.entries(costs || {}).reduce((list, [materialId, amount]) => {
+    const ownedAmount = state.materials?.[materialId] || 0;
+    if (ownedAmount >= amount) return list;
+    const material = MATERIAL_CATALOG[materialId] || null;
+    list.push({
+      materialId,
+      icon: material?.icon || '✦',
+      name: material?.name || materialId,
+      needed: amount,
+      owned: ownedAmount,
+      gap: amount - ownedAmount,
+    });
+    return list;
+  }, []);
+}
+
+function getGearForgeState(item) {
+  const upgrade = getUpgradeCost(item);
+  if (!upgrade) {
+    return {
+      key: 'maxed',
+      label: 'Forge maxed',
+      tone: 'max',
+      hint: 'Potenziamento massimo raggiunto. Questo pezzo e gia al cap attuale.',
+    };
+  }
+
+  const missing = getMissingUpgradeMaterials(upgrade.costs);
+  if (!missing.length) {
+    return {
+      key: 'ready',
+      label: 'Forge ready',
+      tone: 'ready',
+      hint: 'Materiali completi. Puoi salire subito al prossimo tier.',
+    };
+  }
+
+  if (missing.length === 1 && missing[0].materialId === 'BOSS_CORE') {
+    return {
+      key: 'boss_material_missing',
+      label: 'Boss material missing',
+      tone: 'boss',
+      hint: `Ti manca ${missing[0].gap} ${missing[0].icon} ${missing[0].name} per il prossimo step di forge.`,
+    };
+  }
+
+  if (missing.length === 1) {
+    return {
+      key: 'one_material_left',
+      label: 'One material run left',
+      tone: 'near',
+      hint: `Ti manca ${missing[0].gap} ${missing[0].icon} ${missing[0].name} per chiudere il costo.`,
+    };
+  }
+
+  return {
+    key: 'split_materials',
+    label: 'Materials split',
+    tone: 'split',
+    hint: missing.map(entry => `${entry.icon} ${entry.name} ${entry.owned}/${entry.needed}`).join(' · '),
+  };
+}
+
 function getItemUnlockPreviewEntries(limit = 3) {
   const owned = new Set(state.ownedEquipment || []);
   const itemMap = new Map();
@@ -3109,18 +3432,19 @@ function getItemUnlockPreviewEntries(limit = 3) {
         || right.pct - left.pct
         || left.questName.localeCompare(right.questName));
       const bestSource = sortedSources[0];
-      const nearUnlock = bestSource.pct >= 75;
       const sourceMissions = sortedSources.map(source => `${source.questIcon} ${source.questName}`);
+      const progressState = getGearUnlockProgressState({ ...entry, bestSource, sources: sortedSources });
       return {
         ...entry,
         bestSource,
         progressPct: bestSource.pct,
-        nearUnlock,
+        nearUnlock: progressState.key === 'ready_for_drop' || progressState.key === 'close_to_unlock',
+        progressState,
         sourceMissions,
         missingSummary: bestSource.reqProgress.summary,
       };
     })
-    .sort((left, right) => Number(right.bestSource.ready) - Number(left.bestSource.ready)
+    .sort((left, right) => getGearUnlockStatePriority(right.progressState?.key) - getGearUnlockStatePriority(left.progressState?.key)
       || right.progressPct - left.progressPct
       || EQUIPMENT_SLOTS.indexOf(left.slot) - EQUIPMENT_SLOTS.indexOf(right.slot))
     .slice(0, limit);
@@ -3133,7 +3457,9 @@ function getSlotUnlockPreview(slot, previewEntries) {
 function renderArmorySourceLine(entry, mode = 'default') {
   const best = entry?.bestSource;
   if (!best) return '';
-  const label = mode === 'compact' ? 'Missione da fare ora' : 'Sblocca con questa missione';
+  const label = best.ready
+    ? mode === 'compact' ? 'Run pronto ora' : 'Missione pronta'
+    : mode === 'compact' ? 'Rotta chiave' : 'Sblocca con questa missione';
   const alternatives = (entry.sources?.length || 0) > 1
     ? ` · +${entry.sources.length - 1} altre rotte`
     : '';
@@ -3152,8 +3478,7 @@ function applyPendingQuestBoardFocus() {
   if (!pendingQuestBoardFocus || currentScreen !== 'quests') return;
   const card = document.querySelector(`.quest-card[data-quest-id="${pendingQuestBoardFocus.questId}"]`);
   if (!card) return;
-  const detail = card.querySelector('.q-detail');
-  if (detail && !detail.classList.contains('open')) detail.classList.add('open');
+  setQuestLayerOpen(`detail-${pendingQuestBoardFocus.questId}`, true);
   card.classList.add('armory-focus');
   card.scrollIntoView({ behavior: 'smooth', block: 'center' });
   setTimeout(() => card.classList.remove('armory-focus'), 2200);
@@ -3165,11 +3490,7 @@ function renderGearUnlockFeature(entry) {
     return '<div class="gear-empty-state">Nessun nuovo unlock imminente rilevato. Continua con special quest e boss per aprire nuovi blueprint.</div>';
   }
   const best = entry.bestSource;
-  const statusLine = best.ready
-    ? 'Quest pronta: devi solo entrare e chiuderla.'
-    : entry.nearUnlock
-      ? 'Quasi sbloccato: sei a un passo dal drop.'
-      : 'Blueprint tracciato: il sistema ti mostra il prossimo reward piu vicino.';
+  const stateLabel = entry.progressState;
 
   return `
     <article class="gear-unlock-feature-card gear-linked-preview ${entry.nearUnlock ? 'near-unlock' : ''}" data-armory-quest-id="${best.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(best.questName)} nel Quest Board">
@@ -3177,18 +3498,18 @@ function renderGearUnlockFeature(entry) {
         <div>
           <div class="gear-unlock-kicker">CLOSEST RELIC</div>
           <h2 class="gear-unlock-feature-title">${entry.item.icon} ${escapeHtml(entry.item.name)}</h2>
-          <p class="gear-unlock-feature-copy">${escapeHtml(entry.item.desc)}</p>
+          <p class="gear-unlock-feature-copy">${escapeHtml(stateLabel.copy)}</p>
         </div>
-        <div class="gear-unlock-badge ${entry.nearUnlock ? 'near' : ''}">${entry.progressPct}%</div>
+        <div class="gear-unlock-badge ${stateLabel.badgeClass}">${stateLabel.badge}</div>
       </div>
-      <div class="gear-unlock-track"><span style="width:${entry.progressPct}%"></span></div>
+      ${stateLabel.showTrack ? `<div class="gear-unlock-track"><span style="width:${entry.progressPct}%"></span></div>` : ''}
       <div class="gear-unlock-meta-row">
         <span>${escapeHtml(EQUIPMENT_SLOT_LABELS[entry.item.slot])} · ${escapeHtml(entry.item.rarity)}</span>
-        <span>${best.questIcon} ${escapeHtml(best.questName)}</span>
+        <span>${escapeHtml(stateLabel.statusLabel)}</span>
       </div>
       ${renderArmorySourceLine(entry)}
-      <div class="gear-unlock-feature-status">${escapeHtml(statusLine)}</div>
-      <div class="gear-unlock-feature-missing">${escapeHtml(entry.missingSummary)}</div>
+      ${stateLabel.progressLabel ? `<div class="gear-unlock-feature-status">${escapeHtml(stateLabel.progressLabel)}</div>` : ''}
+      <div class="gear-unlock-feature-missing">${escapeHtml(stateLabel.missingLine)}</div>
     </article>`;
 }
 
@@ -3803,12 +4124,24 @@ function buildSystemPrompt() {
   const todayDone = (state.todayCompleted || []).length;
   const totalQuests = state.questsCompleted || 0;
   const bossesDefeated = (state.bossesDefeated || []).length;
+  const guideSnapshot = getGuideSituationalSnapshot();
+  const contextNotes = {
+    status: `Pagina attiva: STATUS. Today Command: ${guideSnapshot.todayModel.stateTitle}. Missione: ${guideSnapshot.todayModel.mission ? `${guideSnapshot.todayModel.mission.icon} ${guideSnapshot.todayModel.mission.name}` : 'nessuna'} . Boss verdict: ${guideSnapshot.todayModel.bossDirective.windowLabel}. Campagna: ${guideSnapshot.todayModel.campaign?.targetBoss ? `${guideSnapshot.todayModel.campaign.title} / ${guideSnapshot.todayModel.campaign.effectLines[0] || guideSnapshot.todayModel.campaign.copy}` : 'nessuna branch attiva'}.`,
+    profile: `Pagina attiva: PROFILE. Classe: ${guideSnapshot.classDef ? `${guideSnapshot.classDef.icon} ${guideSnapshot.classDef.name}` : 'non assegnata'}. Top stat: ${guideSnapshot.topStat ? `${guideSnapshot.topStat.name} LV.${getEffectiveStatLv(guideSnapshot.topStat.id)}` : 'N/D'}. Weak stat: ${guideSnapshot.weakStat ? `${guideSnapshot.weakStat.name} LV.${getEffectiveStatLv(guideSnapshot.weakStat.id)}` : 'N/D'}.`,
+    codex: `Pagina attiva: CODEX. Tab attiva: ${guideSnapshot.activeCodexTab?.label || 'SYSTEM'}. Qui devi spiegare regole in linguaggio semplice e operativo.`,
+    quests: `Pagina attiva: QUEST BOARD. Tab attiva: ${guideSnapshot.questTabDef?.label || 'attiva'}. Missione focus: ${guideSnapshot.questFocus ? `${guideSnapshot.questFocus.icon} ${guideSnapshot.questFocus.name}` : 'nessuna missione focus'}.`,
+    gear: `Pagina attiva: ARMORY. Next unlock: ${guideSnapshot.armoryLead ? `${guideSnapshot.armoryLead.item.icon} ${guideSnapshot.armoryLead.item.name} (${guideSnapshot.armoryLead.progressState.statusLabel})` : 'nessun unlock lead'}. Forge focus: ${guideSnapshot.forgeCandidate ? `${guideSnapshot.forgeCandidate.item.icon} ${getItemDisplayName(guideSnapshot.forgeCandidate.item)} (${guideSnapshot.forgeCandidate.forgeState.label})` : 'nessuna forge prioritaria'}.`,
+    boss: `Pagina attiva: BOSS CHAMBER. Boss focus: ${guideSnapshot.bossFocus ? `${guideSnapshot.bossFocus.icon} ${guideSnapshot.bossFocus.name}` : 'nessun boss focus'}. Boss verdict: ${guideSnapshot.todayModel.bossDirective.windowLabel}. Effetti campagna attivi: ${guideSnapshot.bossCampaignEffects?.length ? guideSnapshot.bossCampaignEffects.map(effect => formatCampaignEffectLine(effect)).slice(0, 2).join(' | ') : 'nessuno'}.`,
+  };
+  const contextLine = contextNotes[guideSnapshot.context] || contextNotes.status;
 
   return `Sei lo SHADOW GUIDE, un consulente neuro-tattico dentro un'app di gamification chiamata NEURO-LEVELING (ispirata a Solo Leveling).
 Rispondi SEMPRE in italiano. Sii conciso, diretto, nerd e in tema col gioco. Usa il tono di un mentore da videogame dark-fantasy che pero sa davvero leggere biomarcatori, stress e performance.
 Non usare emoji in eccesso. Max 2-3 frasi per risposta tranne se l'utente chiede spiegazioni dettagliate.
 Mescola linguaggio scientifico e linguaggio da sistema di progressione: quest, build, raid, debuff, cooldown, scan, loadout, dungeon, boss.
 Evita frasi corporate o troppo adulte: la sensazione deve essere da sistema urgente, misterioso e coinvolgente, non da coach generico.
+Non dare mai risposte generiche da chatbot. Devi comportarti come un co-pilot embedded nella pagina attiva: se il contesto cambia, cambia tono, priorita e utilita.
+Su Status devi decidere la prossima mossa. Su Profile devi leggere pattern e target. Su Codex devi semplificare regole. Su Quest devi aiutare a scegliere la missione. Su Armory devi spiegare l'azione per il prossimo unlock. Su Boss devi dire se ingaggiare, evitare o preparare.
 
 CONTESTO GIOCATORE:
 - Nome: ${state.playerName || 'Hunter'}
@@ -3823,6 +4156,9 @@ CONTESTO GIOCATORE:
 - Debuff attivi: ${debuffs.length > 0 ? debuffs.map(d => d.name).join(', ') : 'Nessuno'}
 - Ultimo assessment: ${lastA ? `HRV ${lastA.hrv}ms, BOLT ${lastA.bolt}s, Mood ${lastA.mood}/10, Energy ${lastA.energy}/10, Sleep ${lastA.sleep}/10, Stato SNA: ${lastA.ansState}` : 'Non ancora eseguito'}
 - Quest personalizzate: ${(state.customQuests || []).length}
+
+CONTESTO PAGINA GUIDE:
+- ${contextLine}
 
 COMPETENZE:
 - Biohacking, neuroscienze, respirazione, cold exposure, HRV, tono vagale
@@ -3881,6 +4217,56 @@ function companionReplyLocal(msg) {
   const streak = state.currentStreak;
   const lastA = state.assessmentHistory[state.assessmentHistory.length-1];
   const debuffs = state.activeDebuffs;
+  const snapshot = getGuideSituationalSnapshot();
+  const context = snapshot.context;
+
+  if (/spiega questa pagina|explain|explain this page/.test(m)) {
+    return buildGuidePageExplanation();
+  }
+
+  if (context === 'status' && /adesso|ora|cosa faccio|prossima mossa|today command|status/.test(m)) {
+    const mission = snapshot.todayModel.mission;
+    const campaignLead = snapshot.todayModel.campaign?.targetBoss ? ` Branch campagna viva: ${snapshot.todayModel.campaign.effectLines[0] || snapshot.todayModel.campaign.copy}` : '';
+    if (!snapshot.todayModel.scanReady) return 'Status è ancora in fallback. Prima fai il Daily Scan, poi la home diventa una vera sala controllo con missione, boss verdict e reward forecast.';
+    return mission
+      ? `Mossa prioritaria: ${mission.icon} ${mission.name}. ${snapshot.todayModel.missionReason}${campaignLead}`
+      : 'Lo scan è valido ma non c è un target forte: usa Status per proteggere recovery e aspettare la prossima finestra utile.';
+  }
+
+  if (context === 'profile' && /build|profilo|pattern|debolezza|target/.test(m)) {
+    return `${snapshot.classDef ? `${snapshot.classDef.icon} ${snapshot.classDef.name}` : 'Build non assegnata'}: il core è ${snapshot.topStat ? `${snapshot.topStat.name} LV.${getEffectiveStatLv(snapshot.topStat.id)}` : 'N/D'}, la frattura è ${snapshot.weakStat ? `${snapshot.weakStat.name} LV.${getEffectiveStatLv(snapshot.weakStat.id)}` : 'N/D'}. Priorità: colmare la faglia prima di inseguire target fuori identità.`;
+  }
+
+  if (context === 'codex' && /regol|codex|spiega|sistema/.test(m)) {
+    return `Sei su ${snapshot.activeCodexTab?.label || 'SYSTEM'}: qui non devi decidere cosa fare ora, devi capire una regola e portarla poi su Status, Quest o Armory. Dimmi quale meccanica vuoi tradurre e la riduco in linguaggio operativo.`;
+  }
+
+  if (context === 'quests' && /mission|quest|difficolt|tab|scegli/.test(m)) {
+    const mission = snapshot.questFocus;
+    const mode = getRecommendedMissionMode(snapshot.latestAssessment, mission);
+    const modeInfo = DIFFICULTY_MODES[mode] || DIFFICULTY_MODES.medium;
+    return mission
+      ? `Missione consigliata in questa schermata: ${mission.icon} ${mission.name}. Mode: ${modeInfo.icon} ${modeInfo.label}. Apri il protocol, esegui quello e ignora il resto.`
+      : 'In questa tab il Guide non deve farti leggere tutto: deve isolare una sola missione giocabile ora. Cambia tab o fai prima il Daily Scan se la board non ha un target pulito.';
+  }
+
+  if (context === 'gear' && /item|armory|gear|unlock|forge|material/.test(m)) {
+    if (snapshot.armoryLead) {
+      return `Next unlock: ${snapshot.armoryLead.item.icon} ${snapshot.armoryLead.item.name}. Stato: ${snapshot.armoryLead.progressState.statusLabel}. Azione richiesta: ${snapshot.armoryLead.progressState.missingLine}`;
+    }
+    if (snapshot.forgeCandidate) {
+      return `Focus forge: ${snapshot.forgeCandidate.item.icon} ${getItemDisplayName(snapshot.forgeCandidate.item)}. ${snapshot.forgeCandidate.forgeState.hint}`;
+    }
+    return 'Armory senza lead chiaro: in questo caso la mossa utile è riaprire preview, slot vuoti e mission routing finché un pezzo torna a muoversi.';
+  }
+
+  if (context === 'boss' && /boss|fight|ingaggi|evitare|prepare|raid/.test(m)) {
+    const directive = snapshot.todayModel.bossDirective;
+    const campaignLead = snapshot.bossCampaignEffects?.length ? ` Campagna attiva: ${snapshot.bossCampaignEffects.map(effect => formatCampaignEffectLine(effect)).slice(0, 2).join(' · ')}` : '';
+    return snapshot.bossFocus
+      ? `${directive.windowLabel}: ${snapshot.bossFocus.icon} ${snapshot.bossFocus.name}. ${directive.tacticalReason}${campaignLead}`
+      : 'Nessun boss ha una finestra credibile ora. In Boss Chamber la decisione giusta può essere preparare, non combattere.';
+  }
 
   // Greetings
   if (/^(ciao|hey|salve|buon)/.test(m))
@@ -4579,6 +4965,137 @@ function renderQuests() {
   requestAnimationFrame(applyPendingQuestBoardFocus);
 }
 
+function getQuestPreviewXP(q) {
+  const diffEff = Math.max(1, q.diff);
+  const rarityMult = RARITY_MULT[getQuestRarity(diffEff)];
+  return q.rewards.reduce((sum, reward) => {
+    const penalty = getDebuffPenalty(reward.stat);
+    return sum + Math.round(calcXP(reward.xp, diffEff, state.currentStreak, penalty) * rarityMult);
+  }, 0);
+}
+
+function getQuestModePreviewXP(q, modeKey) {
+  const mode = DIFFICULTY_MODES[modeKey];
+  const diffEff = Math.max(1, q.diff + mode.diffOffset);
+  const rarityMult = RARITY_MULT[getQuestRarity(diffEff)];
+  return q.rewards.reduce((sum, reward) => {
+    const penalty = getDebuffPenalty(reward.stat);
+    const scaled = calcXP(reward.xp, diffEff, state.currentStreak, penalty);
+    return sum + Math.round(scaled * rarityMult * mode.xpMult);
+  }, 0);
+}
+
+function renderQuestHintIconsMarkup(q) {
+  const hints = getQuestHintIcons(q);
+  if (!hints.length) return '';
+  return `<div class="quest-hint-icons">${hints.map(hint => `<span class="quest-hint-icon ${hint.motion}">${hint.emoji}</span>`).join('')}</div>`;
+}
+
+function buildQuestQuickline(q, options = {}) {
+  const { context = 'daily', done = false, locked = false, canComplete = false, isBonus = false, modeInfo = null } = options;
+  const parts = [];
+
+  if (done) {
+    parts.push(modeInfo ? `Clear registrato in modalita ${modeInfo.label}.` : 'Clear registrato oggi.');
+  } else if (locked) {
+    parts.push('Bloccata finche la build non soddisfa i requisiti.');
+  } else if (context === 'weekly' && canComplete) {
+    parts.push('Pronta per il claim della ricompensa weekly.');
+  } else if (context === 'weekly' && Array.isArray(q.subQuests) && q.subQuests.length) {
+    const subDone = q.subQuests.filter(id => state.todayCompleted.includes(id)).length;
+    parts.push(`${subDone}/${q.subQuests.length} obiettivi collegati gia chiusi.`);
+  } else if (isBonus) {
+    parts.push('Target prioritario di oggi.');
+  } else if (q.type === 'SPECIAL') {
+    parts.push('Run ad alto valore con progressione loot.');
+  } else if (context === 'custom') {
+    parts.push('Protocollo creato su misura per la tua build.');
+  }
+
+  if (q.timed) parts.push('Esecuzione a tempo.');
+  if (!parts.length && q.desc) return escapeHtml(q.desc);
+  return escapeHtml(parts.join(' ') || 'Scegli una modalita, esegui il protocollo e apri il razionale solo se ti serve contesto extra.');
+}
+
+function renderQuestLayerMarkup({
+  protocolId,
+  rationaleId,
+  protocol = [],
+  rationale = '',
+  hintMarkup = '',
+  protocolFooter = '',
+  rationaleFooter = ''
+}) {
+  const protocolMarkup = protocol.length
+    ? `<ol class="quest-protocol-list">${protocol.map(step => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+    : '<p class="quest-layer-empty">Nessun protocollo definito per questa missione.</p>';
+  const rationaleMarkup = rationale
+    ? `<p class="quest-rationale-copy">${escapeHtml(rationale)}</p>`
+    : '<p class="quest-layer-empty">Nessun razionale extra registrato.</p>';
+
+  return `
+    <div class="quest-layer-actions">
+      <button class="quest-layer-toggle" type="button" data-layer="protocol" data-target="${protocolId}" aria-expanded="false">Protocol</button>
+      <button class="quest-layer-toggle" type="button" data-layer="rationale" data-target="${rationaleId}" aria-expanded="false">Why</button>
+    </div>
+    <div class="q-detail quest-layer quest-layer-protocol" id="${protocolId}">
+      <div class="quest-layer-head">
+        <span class="quest-layer-kicker">Layer 2</span>
+        <h4 class="quest-layer-title">Execution Protocol</h4>
+      </div>
+      ${protocolMarkup}
+      ${protocolFooter}
+    </div>
+    <div class="quest-layer quest-layer-rationale" id="${rationaleId}">
+      <div class="quest-layer-head">
+        <span class="quest-layer-kicker">Layer 3</span>
+        <h4 class="quest-layer-title">Science + Signals</h4>
+      </div>
+      ${rationaleMarkup}
+      ${hintMarkup ? `<div class="quest-layer-signals"><span class="quest-signal-label">Segnali utili</span>${hintMarkup}</div>` : ''}
+      ${rationaleFooter}
+    </div>`;
+}
+
+function setQuestLayerOpen(targetId, isOpen) {
+  const layer = $(targetId);
+  if (!layer) return false;
+  layer.classList.toggle('open', isOpen);
+  document.querySelectorAll(`.quest-layer-toggle[data-target="${targetId}"]`).forEach(btn => {
+    btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  });
+  return true;
+}
+
+function toggleQuestLayer(targetId) {
+  const layer = $(targetId);
+  if (!layer) return false;
+  return setQuestLayerOpen(targetId, !layer.classList.contains('open'));
+}
+
+function bindQuestLayerInteractions(listEl, options = {}) {
+  const blockedSelectors = ['.diff-mode-btn', '.quest-layer-toggle', '.quest-layer', '.cq-edit-btn', '.cq-del-btn', ...(options.blockedSelectors || [])];
+
+  listEl.querySelectorAll('.quest-layer-toggle').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleQuestLayer(btn.dataset.target);
+    });
+  });
+
+  listEl.querySelectorAll('.quest-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (blockedSelectors.some(selector => e.target.closest(selector))) return;
+      if (typeof options.onCardClick === 'function') {
+        options.onCardClick(card, e);
+        return;
+      }
+      const protocolToggle = card.querySelector('.quest-layer-toggle[data-layer="protocol"]');
+      if (protocolToggle) toggleQuestLayer(protocolToggle.dataset.target);
+    });
+  });
+}
+
 function renderDailyQuests(dailyBonus, filterFn) {
   const lastA = state.assessmentHistory[state.assessmentHistory.length-1] || null;
   let allQuests = getAvailableQuests(lastA);
@@ -4598,7 +5115,7 @@ function renderDailyQuests(dailyBonus, filterFn) {
     const done = !!doneInfo;
     const locked = !meetsReq(q.req);
     const cls = done ? 'done' : (locked ? 'locked' : '');
-    const totalRew = q.rewards.reduce((a,r) => a + r.xp, 0);
+    const previewXp = getQuestPreviewXP(q);
     const isBonus = dailyBonus.questId === q.id;
     const bonusTag = isBonus ? `<span class="daily-bonus-tag">${dailyBonus.bonus === '2X_XP' ? '💎 2X XP' : dailyBonus.bonus === 'LOOT_DROP' ? '🎁 LOOT' : '⚡ CRIT+'}</span>` : '';
     const rarityTag = `<span class="rarity-badge rarity-${rarity.toLowerCase()}">${RARITY_LABELS[rarity]}</span>`;
@@ -4611,22 +5128,11 @@ function renderDailyQuests(dailyBonus, filterFn) {
           return `<span class="quest-loot-chip">${lootItem?.icon || '✦'} ${getItemDisplayName(lootItem)} · ${entry.weight}%</span>`;
         }).join('')}</div>`
       : '';
-    const questHints = `<div class="quest-hint-icons">${getQuestHintIcons(q).map(hint => `<span class="quest-hint-icon ${hint.motion}">${hint.emoji}</span>`).join('')}</div>`;
+    const questHints = renderQuestHintIconsMarkup(q);
 
-    // XP preview for each mode (matches completeQuest formula)
     const xpPreview = !done && !locked ? `<div class="diff-mode-selector" data-qid="${q.id}">
       ${Object.entries(DIFFICULTY_MODES).map(([k,m]) => {
-        const diffEff = Math.max(1, q.diff + m.diffOffset);
-        const mRarity = getQuestRarity(diffEff);
-        const mRarityMult = RARITY_MULT[mRarity];
-        let mXP = 0;
-        for (const rew of q.rewards) {
-          const pen = getDebuffPenalty(rew.stat);
-          let eff = calcXP(rew.xp, diffEff, state.currentStreak, pen);
-          eff = Math.round(eff * mRarityMult * m.xpMult);
-          mXP += eff;
-        }
-        return `<button class="diff-mode-btn" data-mode="${k}" data-qid="${q.id}" style="border-color:${m.color}"><span class="dm-icon">${m.icon}</span><span class="dm-label">${m.label}</span><span class="dm-xp">+${mXP}</span></button>`;
+        return `<button class="diff-mode-btn" data-mode="${k}" data-qid="${q.id}" style="border-color:${m.color}"><span class="dm-icon">${m.icon}</span><span class="dm-label">${m.label}</span><span class="dm-xp">+${getQuestModePreviewXP(q, k)}</span></button>`;
       }).join('')}
     </div>` : '';
 
@@ -4635,19 +5141,29 @@ function renderDailyQuests(dailyBonus, filterFn) {
         <div class="q-check">${done ? '✓' : (locked ? '🔒' : '')}</div>
         <span class="q-icon">${q.icon}</span>
         <div class="q-body">
-          <div class="q-name">${q.name} ${bonusTag} ${gearTag} ${timedTag} ${doneModeBadge}</div>
-          <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
-          <div class="q-desc">${q.desc}</div>
-          ${questHints}
-          <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
-          ${lootPreview}
-          ${xpPreview}
-          <div class="q-detail" id="detail-${q.id}">
-            <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
-            <div class="q-sci">${q.science}</div>
+          <div class="quest-summary-head">
+            <div class="quest-summary-main">
+              <div class="q-name">${q.name} ${bonusTag} ${gearTag} ${timedTag} ${doneModeBadge}</div>
+              <div class="quest-quickline">${buildQuestQuickline(q, { done, locked, isBonus })}</div>
+            </div>
+            <div class="q-rank rk-${rank}">${rank}</div>
           </div>
+          <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
+          <div class="quest-summary-grid">
+            <span class="quest-summary-chip">${q.dur} min</span>
+            <span class="quest-summary-chip quest-summary-chip-xp">+${previewXp} XP</span>
+            <span class="quest-summary-chip">${locked ? 'Locked' : done ? 'Cleared' : q.type === 'SPECIAL' ? 'Loot Route' : 'Run Ready'}</span>
+          </div>
+          ${xpPreview}
+          ${renderQuestLayerMarkup({
+            protocolId: `detail-${q.id}`,
+            rationaleId: `why-${q.id}`,
+            protocol: q.protocol,
+            rationale: q.science,
+            hintMarkup: questHints,
+            rationaleFooter: lootPreview
+          })}
         </div>
-        <div class="q-rank rk-${rank}">${rank}</div>
       </div>`;
   }).join('');
   }
@@ -4674,15 +5190,7 @@ function renderDailyQuests(dailyBonus, filterFn) {
     });
   });
 
-  // Card click: toggle detail (not start quest — use buttons)
-  listEl.querySelectorAll('.quest-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.diff-mode-btn')) return;
-      const qid = card.dataset.questId;
-      const p = $('detail-'+qid);
-      if (p) p.classList.toggle('open');
-    });
-  });
+  bindQuestLayerInteractions(listEl);
 }
 
 function renderCompletedQuests() {
@@ -4699,32 +5207,37 @@ function renderCompletedQuests() {
       const earnedXp = entry.earnedXp ?? q.rewards.reduce((acc, rew) => acc + rew.xp, 0);
       const timeLbl = q.timed && entry.timeBonus && entry.timeBonus !== 1 ? ` · ⏱ x${entry.timeBonus.toFixed(2)}` : '';
       const gearTag = q.equipmentId ? `<span class="daily-bonus-tag">${EQUIPMENT_CATALOG[q.equipmentId]?.icon || '🎁'} GEAR</span>` : '';
-      const questHints = `<div class="quest-hint-icons">${getQuestHintIcons(q).map(hint => `<span class="quest-hint-icon ${hint.motion}">${hint.emoji}</span>`).join('')}</div>`;
+      const questHints = renderQuestHintIconsMarkup(q);
       return `
         <div class="quest-card done rarity-border-${getQuestRarity(q.diff).toLowerCase()}" data-quest-id="${q.id}" data-cat="${q.cat}">
           <div class="q-check">✓</div>
           <span class="q-icon">${q.icon}</span>
           <div class="q-body">
-            <div class="q-name">${q.name} ${gearTag} <span class="done-mode-badge" style="color:${modeInfo.color}">${modeInfo.icon} ${modeInfo.label}</span></div>
-            <div class="q-tags"><span class="q-cat-tag">${q.cat}</span><span class="timed-tag">COMPLETATA</span></div>
-            <div class="q-desc">${q.desc}</div>
-            ${questHints}
-            <div class="q-meta"><span class="q-dur">${q.dur} min${timeLbl}</span><span class="q-xp">+${earnedXp} XP</span></div>
-            <div class="q-detail" id="detail-completed-${entry.index}">
-              <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
-              <div class="q-sci">${q.science}</div>
+            <div class="quest-summary-head">
+              <div class="quest-summary-main">
+                <div class="q-name">${q.name} ${gearTag} <span class="done-mode-badge" style="color:${modeInfo.color}">${modeInfo.icon} ${modeInfo.label}</span></div>
+                <div class="quest-quickline">${buildQuestQuickline(q, { context: 'completed', done: true, modeInfo })}</div>
+              </div>
+              <div class="q-rank rk-${getRank(q.diff)}">✓</div>
             </div>
+            <div class="q-tags"><span class="q-cat-tag">${q.cat}</span><span class="timed-tag">COMPLETATA</span></div>
+            <div class="quest-summary-grid">
+              <span class="quest-summary-chip">${q.dur} min${timeLbl}</span>
+              <span class="quest-summary-chip quest-summary-chip-xp">+${earnedXp} XP</span>
+              <span class="quest-summary-chip">Archive</span>
+            </div>
+            ${renderQuestLayerMarkup({
+              protocolId: `detail-completed-${entry.index}`,
+              rationaleId: `why-completed-${entry.index}`,
+              protocol: q.protocol,
+              rationale: q.science || q.desc,
+              hintMarkup: questHints
+            })}
           </div>
-          <div class="q-rank rk-${getRank(q.diff)}">✓</div>
         </div>`;
     }).join('');
 
-    listEl.querySelectorAll('.quest-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const detail = card.querySelector('.q-detail');
-        if (detail) detail.classList.toggle('open');
-      });
-    });
+    bindQuestLayerInteractions(listEl);
   }
 
   const total = entries.length;
@@ -4879,25 +5392,34 @@ function renderWeeklyQuests() {
     const locked = !meetsReq(q.req);
     const cls = done ? 'done' : (locked ? 'locked' : (canComplete ? 'completable' : ''));
     const totalRew = q.rewards.reduce((a,r) => a + r.xp, 0);
-    const subProgress = q.subQuests.length > 0
-      ? q.subQuests.map(sq => state.todayCompleted.includes(sq) ? '✅' : '⬜').join(' ')
-      : '';
+    const subDone = q.subQuests.length > 0 ? q.subQuests.filter(sq => state.todayCompleted.includes(sq)).length : 0;
+    const subProgress = q.subQuests.length > 0 ? q.subQuests.map(sq => state.todayCompleted.includes(sq) ? '✅' : '⬜').join(' ') : '';
 
     return `
       <div class="quest-card ${cls} rarity-border-legendary weekly-card" data-quest-id="${q.id}" data-cat="${q.cat}">
         <div class="q-check">${done ? '✓' : (locked ? '🔒' : (canComplete ? '⚡' : ''))}</div>
         <span class="q-icon">${q.icon}</span>
         <div class="q-body">
-          <div class="q-name">${q.name} <span class="weekly-tag">WEEKLY</span></div>
-          <div class="q-desc">${q.desc}</div>
-          ${subProgress ? `<div class="q-sub-progress">${subProgress}</div>` : ''}
-          <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${totalRew} XP</span></div>
-          <div class="q-detail" id="detail-${q.id}">
-            <ol>${q.protocol.map(p=>`<li>${p}</li>`).join('')}</ol>
-            <div class="q-sci">${q.science}</div>
+          <div class="quest-summary-head">
+            <div class="quest-summary-main">
+              <div class="q-name">${q.name} <span class="weekly-tag">WEEKLY</span></div>
+              <div class="quest-quickline">${buildQuestQuickline(q, { context: 'weekly', done, locked, canComplete })}</div>
+            </div>
+            <div class="q-rank rk-S">W</div>
           </div>
+          <div class="quest-summary-grid">
+            <span class="quest-summary-chip">${q.dur} min</span>
+            <span class="quest-summary-chip quest-summary-chip-xp">+${totalRew} XP</span>
+            <span class="quest-summary-chip">${q.subQuests.length ? `${subDone}/${q.subQuests.length} linked` : 'Weekly target'}</span>
+          </div>
+          ${renderQuestLayerMarkup({
+            protocolId: `detail-${q.id}`,
+            rationaleId: `why-${q.id}`,
+            protocol: q.protocol,
+            rationale: q.science,
+            protocolFooter: subProgress ? `<div class="quest-layer-note">${subProgress}</div>` : ''
+          })}
         </div>
-        <div class="q-rank rk-S">W</div>
       </div>`;
   }).join('');
 
@@ -4908,8 +5430,8 @@ function renderWeeklyQuests() {
   $('qpText').textContent = `${done} / ${total} weekly`;
   $('totalRewXp').textContent = '';
 
-  listEl.querySelectorAll('.quest-card').forEach(card => {
-    card.addEventListener('click', () => handleQuestClick(card.dataset.questId, 'weekly'));
+  bindQuestLayerInteractions(listEl, {
+    onCardClick: card => handleQuestClick(card.dataset.questId, 'weekly')
   });
 }
 
@@ -4982,12 +5504,11 @@ function handleQuestClick(qid, tab) {
     const wq = WEEKLY_QUESTS.find(q=>q.id===qid);
     if (!wq) return;
     if ((state.weeklyCompleted||[]).includes(qid)) {
-      const p = $('detail-'+qid); if (p) p.classList.toggle('open'); return;
+      toggleQuestLayer('detail-'+qid); return;
     }
     if (!meetsReq(wq.req)) { showToast('Requisiti non soddisfatti','alert'); return; }
     if (!checkWeeklyCompletion(wq)) {
-      const p = $('detail-'+qid);
-      if (p && !p.classList.contains('open')) { p.classList.add('open'); return; }
+      if (setQuestLayerOpen('detail-'+qid, true)) return;
       showToast('Completa prima le sub-quest richieste!','alert');
       return;
     }
@@ -5384,13 +5905,13 @@ function renderGear() {
   descEl.textContent = totalPower
     ? `${equippedCount}/${EQUIPMENT_SLOTS.length} slot attivi. Bonus item e set gia applicati ai requisiti e ai livelli mostrati.`
     : closestUnlock
-      ? `Armory attiva ma ancora in avvio. Il prossimo reward e ${closestUnlock.item.icon} ${closestUnlock.item.name}: avanzamento ${closestUnlock.progressPct}%.`
+      ? `Armory attiva ma ancora in avvio. Il prossimo reward reale e ${closestUnlock.item.icon} ${closestUnlock.item.name}: ${closestUnlock.progressState.statusLabel.toLowerCase()}.`
       : 'Completa le quest speciali per riempire il loadout e sbloccare bonus progressivi di set.';
 
   unlockFeatureEl.innerHTML = renderGearUnlockFeature(closestUnlock);
   unlockPreviewEl.innerHTML = unlockPreviewEntries.length ? unlockPreviewEntries.map(entry => {
     const best = entry.bestSource;
-    const statusLabel = best.ready ? 'READY FOR RAID' : entry.nearUnlock ? 'NEAR UNLOCK' : 'IN PROGRESS';
+    const unlockState = entry.progressState;
     return `
       <article class="gear-unlock-card gear-linked-preview ${entry.nearUnlock ? 'near-unlock' : ''}" data-armory-quest-id="${best.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(best.questName)} nel Quest Board">
         <div class="gear-unlock-card-top">
@@ -5401,13 +5922,13 @@ function renderGear() {
               <div class="gear-item-rarity ${getGearRarityClass(entry.item.rarity)}">${entry.item.rarity} · ${escapeHtml(EQUIPMENT_SLOT_LABELS[entry.item.slot])}</div>
             </div>
           </div>
-          <div class="gear-unlock-status">${statusLabel}</div>
+          <div class="gear-unlock-status ${unlockState.badgeClass}">${unlockState.badge}</div>
         </div>
-        <div class="gear-unlock-track"><span style="width:${entry.progressPct}%"></span></div>
-        <div class="gear-unlock-progress-label">${entry.progressPct}% verso il drop</div>
+        ${unlockState.showTrack ? `<div class="gear-unlock-track"><span style="width:${entry.progressPct}%"></span></div>` : ''}
+        <div class="gear-unlock-progress-label">${escapeHtml(unlockState.progressLabel)}</div>
         ${renderArmorySourceLine(entry, 'compact')}
-        <div class="gear-unlock-contrib">Missioni collegate: ${entry.sourceMissions.map(source => escapeHtml(source)).join(' · ')}</div>
-        <div class="gear-unlock-missing">${escapeHtml(entry.missingSummary)}</div>
+        <div class="gear-unlock-contrib">${escapeHtml(unlockState.copy)}</div>
+        <div class="gear-unlock-missing">${escapeHtml(unlockState.missingLine)}</div>
       </article>`;
   }).join('') : '<div class="gear-empty-state">Tutti i preview mission-based sono gia stati riscattati. Ora la crescita passa da forge, boss drop e set upgrade.</div>';
 
@@ -5422,7 +5943,7 @@ function renderGear() {
       <div class="gear-blueprint-card ${equippedItem ? 'active' : ''} ${!equippedItem && slotPreview ? 'gear-linked-preview' : ''}" ${!equippedItem && slotPreview ? `data-armory-quest-id="${slotPreview.bestSource.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(slotPreview.bestSource.questName)} nel Quest Board"` : ''}>
         <div class="gear-blueprint-slot">${EQUIPMENT_SLOT_LABELS[slot]}</div>
         <div class="gear-blueprint-state">${equippedItem ? `${equippedItem.icon} ${getItemDisplayName(equippedItem)}` : slotPreview ? `${slotPreview.item.icon} ${slotPreview.item.name}` : 'Slot vuoto'}</div>
-        <div class="gear-blueprint-source">${equippedItem ? sourceText : slotPreview ? `Prossimo target ${slotPreview.progressPct}% · ${slotPreview.bestSource.questIcon} ${slotPreview.bestSource.questName}` : sourceText}</div>
+        <div class="gear-blueprint-source">${equippedItem ? sourceText : slotPreview ? `${slotPreview.progressState.blueprintState} · ${slotPreview.bestSource.questIcon} ${slotPreview.bestSource.questName}` : sourceText}</div>
         ${!equippedItem && slotPreview ? renderArmorySourceLine(slotPreview, 'compact') : ''}
       </div>`;
   }).join('');
@@ -5482,11 +6003,12 @@ function renderGear() {
               ${slotPreview ? `
                 <div class="gear-slot-preview-head">
                   <strong>${slotPreview.item.icon} ${escapeHtml(slotPreview.item.name)}</strong>
-                  <span>${slotPreview.progressPct}%</span>
+                  <span class="gear-slot-preview-badge ${slotPreview.progressState.badgeClass}">${escapeHtml(slotPreview.progressState.slotState)}</span>
                 </div>
-                <div class="gear-slot-preview-track"><span style="width:${slotPreview.progressPct}%"></span></div>
-                <div class="gear-slot-preview-copy">${slotPreview.bestSource.questIcon} ${escapeHtml(slotPreview.bestSource.questName)}</div>
+                ${slotPreview.progressState.showTrack ? `<div class="gear-slot-preview-track"><span style="width:${slotPreview.progressPct}%"></span></div>` : ''}
+                <div class="gear-slot-preview-copy">${slotPreview.bestSource.questIcon} ${escapeHtml(slotPreview.bestSource.questName)} · ${escapeHtml(slotPreview.progressState.progressLabel)}</div>
                 ${renderArmorySourceLine(slotPreview, 'compact')}
+                <div class="gear-slot-preview-copy">${escapeHtml(slotPreview.progressState.missingLine)}</div>
               ` : `Slot vuoto. ${getSlotBlueprintQuests(slot).length ? `Farmalo con ${getSlotBlueprintQuests(slot).map(quest => quest.name).join(' / ')}.` : 'Continua con special quest e boss avanzati per sbloccarlo.'}`}
             </div>`}
       </div>`;
@@ -5499,6 +6021,7 @@ function renderGear() {
     const bonuses = Object.entries(getItemBonuses(item)).map(([stat,val]) => `<span class="gear-bonus-pill">+${val} ${stat}</span>`).join('');
     const upgrade = getUpgradeCost(item);
     const canUpgrade = upgrade && hasUpgradeMaterials(upgrade.costs);
+    const forgeState = getGearForgeState(item);
     return `
       <div class="gear-card ${equipped ? 'equipped' : ''}">
         <div class="gear-card-top">
@@ -5516,7 +6039,9 @@ function renderGear() {
         <div class="gear-upgrade-row">
           <div class="gear-upgrade-meta">
             <div class="gear-upgrade-label">FORGE ${getItemUpgradeLevel(item.id) >= UPGRADE_MAX_LEVEL ? 'MAX' : `NEXT +${upgrade?.nextLevel || UPGRADE_MAX_LEVEL}`}</div>
+            <div class="gear-upgrade-state gear-upgrade-state-${forgeState.tone}">${forgeState.label}</div>
             <div class="gear-upgrade-cost">${upgrade ? formatMaterialCost(upgrade.costs) : 'Potenziamento massimo raggiunto'}</div>
+            <div class="gear-upgrade-hint">${forgeState.hint}</div>
           </div>
           <button class="btn ${canUpgrade ? '' : 'ghost'}" data-upgrade-item="${item.id}" ${upgrade ? '' : 'disabled'}>${upgrade ? 'Forge' : 'MAX'}</button>
         </div>
@@ -5527,15 +6052,15 @@ function renderGear() {
   }).join('') : closestUnlock ? `
     <div class="gear-empty-state gear-empty-state-live gear-linked-preview" data-armory-quest-id="${closestUnlock.bestSource.questId}" tabindex="0" role="button" aria-label="Apri la missione ${escapeHtml(closestUnlock.bestSource.questName)} nel Quest Board">
       <div class="gear-empty-title">Il tuo primo reward reale e gia tracciato</div>
-      <div class="gear-empty-copy">Nessun arsenale ancora equipaggiato, ma il sistema ha gia agganciato il drop piu vicino per evitare uno stato morto.</div>
+      <div class="gear-empty-copy">Nessun arsenale ancora equipaggiato, ma il sistema ha gia agganciato una rotta credibile per evitare uno stato morto.</div>
       <div class="gear-slot-preview-head">
         <strong>${closestUnlock.item.icon} ${escapeHtml(closestUnlock.item.name)}</strong>
-        <span>${closestUnlock.progressPct}%</span>
+        <span class="gear-slot-preview-badge ${closestUnlock.progressState.badgeClass}">${closestUnlock.progressState.slotState}</span>
       </div>
-      <div class="gear-slot-preview-track"><span style="width:${closestUnlock.progressPct}%"></span></div>
+      ${closestUnlock.progressState.showTrack ? `<div class="gear-slot-preview-track"><span style="width:${closestUnlock.progressPct}%"></span></div>` : ''}
       <div class="gear-empty-copy">Missione chiave: ${closestUnlock.bestSource.questIcon} ${escapeHtml(closestUnlock.bestSource.questName)}</div>
       ${renderArmorySourceLine(closestUnlock, 'compact')}
-      <div class="gear-empty-copy">${escapeHtml(closestUnlock.missingSummary)}</div>
+      <div class="gear-empty-copy">${escapeHtml(closestUnlock.progressState.missingLine)}</div>
     </div>` : '<div class="gear-empty-state">Nessun equip ottenuto. Le missioni speciali iniziano a comparire quando alzi le stat richieste.</div>';
 
   const flaskItems = owned.filter(item => isFlaskItem(item.id));
@@ -5546,6 +6071,7 @@ function renderGear() {
     const ready = cooldownRemaining <= 0;
     const upgrade = getUpgradeCost(item);
     const canUpgrade = upgrade && hasUpgradeMaterials(upgrade.costs);
+    const forgeState = getGearForgeState(item);
     return `
       <div class="gear-consumable-card ${ready ? 'ready' : 'cooldown'}">
         <div class="gear-consumable-top">
@@ -5565,7 +6091,9 @@ function renderGear() {
         <div class="gear-upgrade-row">
           <div class="gear-upgrade-meta">
             <div class="gear-upgrade-label">FORGE ${getItemUpgradeLevel(item.id) >= UPGRADE_MAX_LEVEL ? 'MAX' : `NEXT +${upgrade?.nextLevel || UPGRADE_MAX_LEVEL}`}</div>
+            <div class="gear-upgrade-state gear-upgrade-state-${forgeState.tone}">${forgeState.label}</div>
             <div class="gear-upgrade-cost">${upgrade ? formatMaterialCost(upgrade.costs) : 'Potenziamento massimo raggiunto'}</div>
+            <div class="gear-upgrade-hint">${forgeState.hint}</div>
           </div>
           <button class="btn ${canUpgrade ? '' : 'ghost'}" data-upgrade-item="${item.id}" ${upgrade ? '' : 'disabled'}>${upgrade ? 'Forge' : 'MAX'}</button>
         </div>
@@ -5638,7 +6166,7 @@ function renderBossGrid() {
   g.innerHTML = BOSS_DEFINITIONS.map(b => {
     const dead = state.bossesDefeated.includes(b.id);
     const locked = !meetsReq(b.req);
-    const campaignEffects = getBossCampaignEffects(b);
+    const campaignPreview = getBossCampaignPreview(b);
     const cls = dead ? 'defeated' : (locked ? 'locked' : '');
     let stHtml;
     if (dead) stHtml = '<span class="bc-status st-dead">☠ SCONFITTO</span>';
@@ -5651,7 +6179,8 @@ function renderBossGrid() {
         <div class="bc-lv">LV. ${b.level}</div>
         <div class="bc-emotion">${b.emotionLabel || 'EMOTIONAL SIGNATURE'}</div>
         <div class="bc-quote">“${b.quote || b.desc}”</div>
-        ${campaignEffects.length ? `<div class="bc-campaign">Campaign Effects ${campaignEffects.length}</div>` : '<div class="bc-campaign empty">Base Encounter</div>'}
+        <div class="bc-campaign ${campaignPreview.toneClass}">${escapeHtml(campaignPreview.badge)}</div>
+        <div class="bc-campaign-copy">${escapeHtml(campaignPreview.copy)}</div>
         ${stHtml}
       </div>`;
   }).join('');
@@ -5684,6 +6213,71 @@ function getBossCampaignEffects(boss) {
         sourceBoss,
       }));
   });
+}
+
+function getBossCampaignPriorityScore(boss, source = 'strengths') {
+  if (!boss) return 0;
+  const effects = getBossCampaignEffects(boss);
+  if (!effects.length) return 0;
+  let score = effects.length * 4;
+  if (effects.some(effect => (effect.durationMult || 1) < 1 || !!effect.damageBonus || !!effect.advantage)) score += 3;
+  if (effects.some(effect => effect.protocolStep || effect.fastProtocolAdd)) score += 2;
+  if (effects.some(effect => effect.bonusRewards?.length || effect.rewardUnlock)) score += 2;
+  if (source === 'strengths' && meetsReq(boss.req)) score += 3;
+  if (source === 'fears' && effects.some(effect => effect.weaknessReveal)) score += 1;
+  return score;
+}
+
+function getCampaignEffectTypeLabel(effect) {
+  if (!effect) return 'Campaign shift';
+  if (effect.type === 'weakness') return 'Weakness revealed';
+  if (effect.type === 'protocol') return 'Protocol shortcut';
+  if (effect.type === 'reward') return 'Bonus material enabled';
+  if (effect.type === 'advantage') return 'Safer engage window';
+  return effect.title || 'Campaign shift';
+}
+
+function formatCampaignEffectLine(effect) {
+  if (!effect) return 'Campaign shift active';
+  return `${effect.sourceBoss?.icon || '☠'} ${effect.sourceBoss?.name || effect.sourceBossId} → ${getCampaignEffectTypeLabel(effect)}: ${effect.summary}`;
+}
+
+function getBossCampaignPreview(boss) {
+  if (!boss) {
+    return {
+      badge: 'Base Encounter',
+      copy: 'Nessuna conseguenza campagna attiva.',
+      toneClass: 'empty',
+    };
+  }
+
+  const incoming = getBossCampaignEffects(boss);
+  if (incoming.length) {
+    const lead = incoming[0];
+    return {
+      badge: `Campaign Live ${incoming.length}`,
+      copy: `${lead.sourceBoss?.icon || '☠'} ${lead.sourceBoss?.name || lead.sourceBossId}: ${getCampaignEffectTypeLabel(lead)}.`,
+      toneClass: 'live',
+    };
+  }
+
+  if (state.bossesDefeated.includes(boss.id)) {
+    const outgoing = getCampaignUnlocksFromVictory(boss.id);
+    if (outgoing.length) {
+      const lead = outgoing[0];
+      return {
+        badge: `Victory Echo ${outgoing.length}`,
+        copy: `${lead.targetBoss?.icon || '☠'} ${lead.targetBoss?.name || lead.targetId}: ${getCampaignEffectTypeLabel(lead)}.`,
+        toneClass: 'echo',
+      };
+    }
+  }
+
+  return {
+    badge: 'Base Encounter',
+    copy: 'Nessuna conseguenza campagna attiva.',
+    toneClass: 'empty',
+  };
 }
 
 function getCampaignUnlocksFromVictory(bossId) {
@@ -5925,7 +6519,7 @@ function startBossFight(boss) {
     banner.classList.remove('hidden');
     banner.classList.toggle('active', profile.campaignEffects.length > 0);
     banner.innerHTML = profile.campaignEffects.length
-      ? `<div class="boss-campaign-banner-kicker">CAMPAIGN SHIFT</div><div class="boss-campaign-banner-copy">${profile.campaignEffects.length} effetti attivi da vittorie precedenti. Questo encounter ha protocollo e reward parzialmente alterati.</div>`
+      ? `<div class="boss-campaign-banner-kicker">CAMPAIGN SHIFT</div><div class="boss-campaign-banner-copy">${profile.campaignEffects.length} effetti attivi da vittorie precedenti. Questo encounter ha protocollo, finestra e reward parzialmente alterati.</div><div class="boss-campaign-banner-list">${profile.campaignEffects.slice(0, 3).map(effect => `<div class="boss-campaign-banner-row">${escapeHtml(formatCampaignEffectLine(effect))}</div>`).join('')}</div>`
       : '<div class="boss-campaign-banner-kicker">BASE ENCOUNTER</div><div class="boss-campaign-banner-copy">Nessuna vittoria precedente sta alterando questo boss. Affronti il protocollo originale.</div>';
   }
   renderBossProtocolSections(boss);
@@ -6234,21 +6828,12 @@ function renderCustomQuests() {
     const timedTag = q.timed ? '<span class="timed-tag">⏱ TIMED</span>' : '';
     const customTag = '<span class="custom-tag">✦ CUSTOM</span>';
     const doneModeBadge = doneInfo?.mode ? `<span class="done-mode-badge" style="color:${DIFFICULTY_MODES[doneInfo.mode].color}">${DIFFICULTY_MODES[doneInfo.mode].icon} ${DIFFICULTY_MODES[doneInfo.mode].label}</span>` : '';
-    const questHints = `<div class="quest-hint-icons">${getQuestHintIcons(q).map(hint => `<span class="quest-hint-icon ${hint.motion}">${hint.emoji}</span>`).join('')}</div>`;
+    const questHints = renderQuestHintIconsMarkup(q);
+    const previewXp = getQuestPreviewXP(q);
 
     const xpPreview = !done ? `<div class="diff-mode-selector" data-qid="${q.id}">
       ${Object.entries(DIFFICULTY_MODES).map(([k,m]) => {
-        const diffEff = Math.max(1, q.diff + m.diffOffset);
-        const mRarity = getQuestRarity(diffEff);
-        const mRarityMult = RARITY_MULT[mRarity];
-        let mXP = 0;
-        for (const rew of q.rewards) {
-          const pen = getDebuffPenalty(rew.stat);
-          let eff = calcXP(rew.xp, diffEff, state.currentStreak, pen);
-          eff = Math.round(eff * mRarityMult * m.xpMult);
-          mXP += eff;
-        }
-        return `<button class="diff-mode-btn" data-mode="${k}" data-qid="${q.id}" style="border-color:${m.color}"><span class="dm-icon">${m.icon}</span><span class="dm-label">${m.label}</span><span class="dm-xp">+${mXP}</span></button>`;
+        return `<button class="diff-mode-btn" data-mode="${k}" data-qid="${q.id}" style="border-color:${m.color}"><span class="dm-icon">${m.icon}</span><span class="dm-label">${m.label}</span><span class="dm-xp">+${getQuestModePreviewXP(q, k)}</span></button>`;
       }).join('')}
     </div>` : '';
 
@@ -6257,21 +6842,25 @@ function renderCustomQuests() {
         <div class="q-check">${done ? '✓' : ''}</div>
         <span class="q-icon">${q.icon}</span>
         <div class="q-body">
-          <div class="q-name">${q.name} ${customTag} ${timedTag} ${doneModeBadge}</div>
-          <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
-          <div class="q-desc">${q.desc || ''}</div>
-          ${questHints}
-          <div class="q-meta"><span class="q-dur">${q.dur} min</span><span class="q-xp">+${(() => { const de = Math.max(1, q.diff); const rr = RARITY_MULT[getQuestRarity(de)]; let t = 0; for (const r of q.rewards) { t += Math.round(calcXP(r.xp, de, state.currentStreak, getDebuffPenalty(r.stat)) * rr); } return t; })()} XP</span></div>
-          ${xpPreview}
-          <div class="q-detail" id="detail-${q.id}">
-            <ol>${(q.protocol||[]).map(p=>`<li>${p}</li>`).join('')}</ol>
-            <div class="cq-card-actions">
-              <button class="btn-secondary cq-edit-btn" data-id="${q.id}">✏ MODIFICA</button>
-              <button class="btn-danger cq-del-btn" data-id="${q.id}">🗑 ELIMINA</button>
+          <div class="quest-summary-head">
+            <div class="quest-summary-main">
+              <div class="q-name">${q.name} ${customTag} ${timedTag} ${doneModeBadge}</div>
+              <div class="quest-quickline">${buildQuestQuickline(q, { context: 'custom', done })}</div>
             </div>
+            <div class="q-rank rk-${rank}">${rank}</div>
           </div>
+          <div class="q-tags">${rarityTag}<span class="q-cat-tag">${q.cat}</span></div>
+          <div class="quest-summary-grid"><span class="quest-summary-chip">${q.dur} min</span><span class="quest-summary-chip quest-summary-chip-xp">+${previewXp} XP</span><span class="quest-summary-chip">Custom</span></div>
+          ${xpPreview}
+          ${renderQuestLayerMarkup({
+            protocolId: `detail-${q.id}`,
+            rationaleId: `why-${q.id}`,
+            protocol: q.protocol || [],
+            rationale: q.science || q.desc || 'Missione custom definita dal giocatore.',
+            hintMarkup: questHints,
+            protocolFooter: `<div class="cq-card-actions"><button class="btn-secondary cq-edit-btn" data-id="${q.id}">✏ MODIFICA</button><button class="btn-danger cq-del-btn" data-id="${q.id}">🗑 ELIMINA</button></div>`
+          })}
         </div>
-        <div class="q-rank rk-${rank}">${rank}</div>
       </div>`;
   }).join('');
 
@@ -6303,15 +6892,7 @@ function renderCustomQuests() {
     btn.addEventListener('click', (e) => { e.stopPropagation(); deleteCustomQuest(btn.dataset.id); });
   });
 
-  // Card click: toggle detail
-  listEl.querySelectorAll('.quest-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.diff-mode-btn') || e.target.closest('.cq-edit-btn') || e.target.closest('.cq-del-btn')) return;
-      const qid = card.dataset.questId;
-      const p = $('detail-'+qid);
-      if (p) p.classList.toggle('open');
-    });
-  });
+  bindQuestLayerInteractions(listEl);
 }
 
 function initCustomQuestModal() {
@@ -6383,53 +6964,134 @@ let aiConfigAvatarDraft = null;
 // COMPANION CHAT
 // ========================
 
+function getGuideContextScreen() {
+  return lastGuideContextScreen || 'status';
+}
+
+function getGuideSituationalSnapshot() {
+  const context = getGuideContextScreen();
+  const latestAssessment = getLatestAssessment();
+  const classDef = CLASS_DEFINITIONS.find(entry => entry.id === state.playerClass) || null;
+  const topStat = [...PRIMARY_STATS].sort((left, right) => getEffectiveStatLv(right.id) - getEffectiveStatLv(left.id))[0] || null;
+  const weakStat = [...PRIMARY_STATS].sort((left, right) => getEffectiveStatLv(left.id) - getEffectiveStatLv(right.id))[0] || null;
+  const todayModel = buildTodayCommandModel();
+  const profileRecommendations = getProfileRecommendations();
+  const activeCodexTab = CODEX_TAB_DEFS.find(tab => tab.id === state.codexTab) || CODEX_TAB_DEFS[0];
+  const questTabDef = QUEST_TAB_DEFS.find(tab => tab.id === questTab) || QUEST_TAB_DEFS[0];
+  const availableQuests = getAvailableQuests(latestAssessment || null).filter(quest => !getDoneInfo(quest.id));
+  const questsInTab = questTabDef?.filter ? availableQuests.filter(questTabDef.filter) : availableQuests;
+  const questFocus = todayModel.mission && getQuestTabIdForQuest(todayModel.mission) === questTab ? todayModel.mission : (questsInTab[0] || todayModel.mission || null);
+  const unlockPreview = getItemUnlockPreviewEntries(3);
+  const armoryLead = unlockPreview[0] || null;
+  const forgeCandidate = getOwnedEquipmentItems()
+    .map(item => ({ item, forgeState: getGearForgeState(item), upgradeLevel: getItemUpgradeLevel(item.id) }))
+    .filter(entry => entry.forgeState.key !== 'maxed')
+    .sort((left, right) => Number(left.forgeState.key === 'ready') - Number(right.forgeState.key === 'ready') || left.upgradeLevel - right.upgradeLevel)[0] || null;
+  const bossFocus = activeBoss || todayModel.bossDirective?.boss || BOSS_DEFINITIONS.find(boss => !state.bossesDefeated.includes(boss.id) && meetsReq(boss.req)) || null;
+  const bossCampaignEffects = bossFocus ? getBossCampaignEffects(bossFocus) : [];
+
+  return {
+    context,
+    latestAssessment,
+    classDef,
+    topStat,
+    weakStat,
+    todayModel,
+    profileRecommendations,
+    activeCodexTab,
+    questTabDef,
+    questFocus,
+    armoryLead,
+    forgeCandidate,
+    bossFocus,
+    bossCampaignEffects,
+  };
+}
+
 function buildGuideContextModel() {
-  const context = lastGuideContextScreen || 'status';
+  const snapshot = getGuideSituationalSnapshot();
+  const { context, todayModel, classDef, topStat, weakStat, activeCodexTab, questTabDef, questFocus, armoryLead, forgeCandidate, bossFocus, bossCampaignEffects } = snapshot;
+
   const models = {
     status: {
-      title: 'Guide = Tactical support',
-      copy: 'Usa questa schermata quando vuoi trasformare il Daily Command in una mossa concreta, senza rileggere tutto il sistema.',
-      explainLabel: 'Explain Status',
-      prompts: ['Leggi il mio stato di oggi e dimmi la prossima mossa', 'Spiegami perche la missione consigliata ha senso oggi', 'Dammi una versione piu semplice del piano giornaliero'],
+      title: 'Guide = Tactical co-pilot',
+      copy: todayModel.scanReady
+        ? `Scan locked. Ora conta una sola cosa: ${todayModel.mission ? `${todayModel.mission.icon} ${todayModel.mission.name}` : 'convertire il command in azione'}.${todayModel.campaign?.targetBoss ? ` La campagna sta gia piegando ${todayModel.campaign.targetBoss.icon} ${todayModel.campaign.targetBoss.name}.` : ''}`
+        : 'Qui il Guide non riassume la home: ti dice cosa sblocca davvero il Daily Scan e quale mossa viene prima di tutto.',
+      explainLabel: 'Explain Status Now',
+      prompts: [
+        'Decidi tu la mia prossima mossa adesso',
+        todayModel.scanReady ? 'Perche il Today Command mi sta mandando proprio su questa missione' : 'Perche senza scan il comando di oggi resta incompleto',
+        todayModel.campaign?.targetBoss ? 'Dimmi cosa cambia nel prossimo boss grazie alle vittorie gia fatte' : 'Dimmi se la campagna boss e gia viva oppure no',
+        'Leggi rischio boss e reward atteso in modo semplice',
+      ],
     },
     profile: {
-      title: 'Guide = Build interpretation',
-      copy: 'Qui il Guide non ti ripete il profilo: ti aiuta a leggere build, identita, punti forti, debolezze e target.',
-      explainLabel: 'Explain Profile',
-      prompts: ['Leggi la mia build e dimmi dove sono piu forte', 'Quale debolezza dovrei correggere prima', 'Che boss o missione colpisce meglio il mio profilo'],
+      title: 'Guide = Build analyst',
+      copy: `Qui il Guide legge pattern, priorita e target: ${classDef ? `${classDef.icon} ${classDef.name}` : 'build non assegnata'} · top ${topStat?.name || 'N/D'} · fragilita ${weakStat?.name || 'N/D'}.`,
+      explainLabel: 'Explain Build Pattern',
+      prompts: [
+        'Dimmi il pattern vero della mia build',
+        'Quale debolezza mi sta rallentando di piu',
+        'Che target ha piu senso per il mio profilo adesso',
+      ],
     },
     codex: {
-      title: 'Guide = Rule translation',
-      copy: 'Qui il Guide converte le regole del Codex in linguaggio operativo, senza farti studiare tutto da solo.',
-      explainLabel: 'Explain Codex',
-      prompts: ['Spiegami il Codex in parole semplici', 'Dimmi come funzionano davvero rank, set e gear', 'Riassumi le regole del sistema in 3 punti'],
+      title: 'Guide = Rule translator',
+      copy: `Qui il Guide traduce ${activeCodexTab?.label || 'SYSTEM'} in linguaggio pratico, senza farti leggere il sistema come documentazione.`,
+      explainLabel: 'Explain This Rule Set',
+      prompts: [
+        `Spiegami ${activeCodexTab?.label || 'questa sezione'} in linguaggio umano`,
+        'Dimmi cosa conta davvero e cosa posso ignorare',
+        'Trasforma queste regole in 3 regole pratiche',
+      ],
     },
     quests: {
-      title: 'Guide = Mission support',
-      copy: 'Qui il Guide ti aiuta a scegliere la missione giusta, leggere la difficolta e ridurre attrito prima di partire.',
-      explainLabel: 'Explain Quest Board',
-      prompts: ['Quale missione dovrei aprire adesso', 'Che difficolta mi conviene scegliere oggi', 'Riduci questa missione a una checklist piu semplice'],
+      title: 'Guide = Mission selector',
+      copy: questFocus
+        ? `Qui il Guide decide tra tab, missione e difficolta. Focus attuale: ${questFocus.icon} ${questFocus.name}${questTabDef ? ` · tab ${questTabDef.label}` : ''}.`
+        : 'Qui il Guide ti aiuta a capire quale missione aprire e quale attrito ridurre prima di partire.',
+      explainLabel: 'Explain Mission Choice',
+      prompts: [
+        'Quale missione dovrei scegliere in questa tab',
+        'Che mode mi conviene per la missione di adesso',
+        'Riduci la missione giusta a una checklist tattica',
+      ],
     },
     gear: {
-      title: 'Guide = Reward routing',
-      copy: 'Qui il Guide ti mostra come trasformare preview, materiali e set bonus nel prossimo reward reale.',
-      explainLabel: 'Explain Armory',
-      prompts: ['Qual e il prossimo item che dovrei sbloccare', 'Dimmi quali missioni accelerano il mio Armory', 'Spiegami come usare meglio set e forge'],
+      title: 'Guide = Unlock co-pilot',
+      copy: armoryLead
+        ? `Qui il Guide ti dice come convertire ${armoryLead.item.icon} ${armoryLead.item.name} da preview a reward reale.`
+        : forgeCandidate
+          ? `Qui il Guide ti legge la forge: focus attuale ${forgeCandidate.item.icon} ${getItemDisplayName(forgeCandidate.item)}.`
+          : 'Qui il Guide connette preview, forge e mission routing al prossimo item concreto.',
+      explainLabel: 'Explain Next Unlock',
+      prompts: [
+        'Qual e l azione esatta per sbloccare il prossimo item',
+        'Dimmi se devo farmare missione o materiali adesso',
+        'Spiegami il prossimo upgrade Armory in modo semplice',
+      ],
     },
     boss: {
-      title: 'Guide = Boss tactics',
-      copy: 'Qui il Guide ti aiuta a leggere trigger, protocollo, rischio e timing del prossimo fight.',
-      explainLabel: 'Explain Boss Chamber',
-      prompts: ['Quale boss ha piu senso per me adesso', 'Riassumi il protocollo del boss in 3 mosse', 'Dimmi se oggi devo affrontare o evitare un boss'],
+      title: 'Guide = Boss co-pilot',
+      copy: bossFocus
+        ? `Qui il Guide legge timing e rischio del fight su ${bossFocus.icon} ${bossFocus.name}, non solo la lore del boss.${bossCampaignEffects.length ? ` La campagna ha gia lasciato ${bossCampaignEffects.length} cicatrici utili su questo encounter.` : ''}`
+        : 'Qui il Guide decide se un boss va affrontato, evitato o preparato.',
+      explainLabel: 'Explain Boss Decision',
+      prompts: [
+        'Devo ingaggiare o evitare il boss adesso',
+        bossCampaignEffects.length ? 'Dimmi quali vantaggi campagna sono gia attivi su questo boss' : 'Dimmi quale vittoria cambiera il prossimo boss',
+        'Dimmi la preparazione minima prima del prossimo boss',
+        'Riassumi il fight in una sequenza corta e utile',
+      ],
     },
   };
   return models[context] || models.status;
 }
 
 function buildGuidePageExplanation() {
-  const context = lastGuideContextScreen || 'status';
-  const latestAssessment = getLatestAssessment();
-  const classDef = CLASS_DEFINITIONS.find(entry => entry.id === state.playerClass);
+  const snapshot = getGuideSituationalSnapshot();
+  const { context, latestAssessment, classDef, topStat, weakStat, todayModel, profileRecommendations, activeCodexTab, questTabDef, questFocus, armoryLead, forgeCandidate, bossFocus, bossCampaignEffects } = snapshot;
   const topStats = [...PRIMARY_STATS]
     .sort((left, right) => getEffectiveStatLv(right.id) - getEffectiveStatLv(left.id))
     .slice(0, 2)
@@ -6437,38 +7099,38 @@ function buildGuidePageExplanation() {
     .join(' · ');
 
   if (context === 'status') {
-    const mission = chooseRecommendedQuest('strengths') || chooseRecommendedQuest('weaknesses') || chooseRecommendedQuest('fears');
-    const lowRecovery = !latestAssessment || isForcedRest() || latestAssessment.ansState === 'SYMPATHETIC' || latestAssessment.sleep <= 4 || latestAssessment.energy <= 4;
-    const bossDirective = latestAssessment
-      ? getTodayBossDirective(latestAssessment, true, lowRecovery)
-      : { kind: 'avoid', boss: null, summary: 'Prima serve uno scan giornaliero.' };
+    const mission = todayModel.mission;
+    const bossDirective = todayModel.bossDirective;
     return [
-      'STATUS ti dice solo cosa conta oggi: stato del sistema, prossima missione e rischio immediato.',
-      latestAssessment
-        ? `Leggi prima lo scan: ${latestAssessment.ansState}, HRV ${latestAssessment.hrv}ms, BOLT ${latestAssessment.bolt}s. Questo decide se spingere o proteggere recovery.`
-        : 'Se manca lo scan, la priorita assoluta e fare il Daily Assess prima di leggere il resto.',
+      'STATUS e una sala controllo giornaliera: prima leggi se lo scan e valido, poi decidi missione, rischio boss e reward immediato.',
+      latestAssessment && todayModel.scanReady
+        ? `Oggi lo scan è attivo: ${latestAssessment.ansState}, HRV ${latestAssessment.hrv}ms, BOLT ${latestAssessment.bolt}s. Questo apre ${todayModel.stateTitle.toLowerCase()}.`
+        : 'Se il Daily Scan manca, la schermata non sta davvero decidendo per te: il primo comando reale resta fare lo scan.',
       mission
-        ? `Poi guarda la missione raccomandata: ${mission.icon} ${mission.name}. E la mossa piu utile nel breve, non un riassunto di tutto il profilo.`
-        : 'Se non c e una missione chiara, usa Status per capire quale frizione va ridotta oggi.',
+        ? `La missione di oggi è ${mission.icon} ${mission.name}. Il motivo tattico è questo: ${todayModel.missionReason}`
+        : 'Finche la missione non e validata dallo scan, non leggere Status come piano operativo completo.',
       bossDirective.boss
-        ? `${bossDirective.kind === 'engage' ? 'Infine valuta il boss da affrontare' : 'Infine nota il boss da evitare'}: ${bossDirective.boss.icon} ${bossDirective.boss.name}.`
+        ? `${bossDirective.kind === 'engage' ? 'Sul boss hai una engage window' : 'Sul boss hai un warning'}: ${bossDirective.boss.icon} ${bossDirective.boss.name}. ${bossDirective.tacticalReason}`
         : 'Finche non c e un boss utile da mostrare, Status resta centrato su scan e missione.',
+      todayModel.campaign?.targetBoss
+        ? `La campagna è attiva su ${todayModel.campaign.targetBoss.icon} ${todayModel.campaign.targetBoss.name}: ${todayModel.campaign.effectLines[0] || todayModel.campaign.copy}`
+        : 'La campagna boss non è ancora viva: il prossimo clear aprirà la prima conseguenza persistente.',
     ].join('\n\n');
   }
 
   if (context === 'profile') {
-    const recommendations = getProfileRecommendations();
+    const recommendations = profileRecommendations;
     return [
-      'PROFILE serve a capire chi sei nel sistema, non cosa fare nei prossimi 10 minuti.',
-      `${classDef ? `${classDef.icon} ${classDef.name}` : 'Classe non assegnata'} e ${topStats || 'build in definizione'} ti dicono dove la build e gia forte.`,
-      `Punti forti, debolezze e paure spiegano perche il sistema ti assegna certi target e non altri.`,
-      `La Targeting Matrix traduce quel profilo in missioni e boss coerenti con la tua identita attuale.`,
+      'PROFILE non serve a scegliere la prossima azione secca: serve a capire che pattern stai costruendo e quali target hanno senso per quella build.',
+      `${classDef ? `${classDef.icon} ${classDef.name}` : 'Classe non assegnata'} + ${topStats || 'build in definizione'} mostrano il core della build. ${weakStat ? `La faglia attuale e ${weakStat.name} LV.${getEffectiveStatLv(weakStat.id)}.` : ''}`,
+      `Punti forti: ${recommendations.strengths.text || 'non definiti'}. Debolezze: ${recommendations.weaknesses.text || 'non definite'}. Paure: ${recommendations.fears.text || 'non definite'}.`,
+      `La priorita pratica emerge dai target: strength -> ${recommendations.strengths.quest ? `${recommendations.strengths.quest.icon} ${recommendations.strengths.quest.name}` : 'nessuna missione'}; weakness -> ${recommendations.weaknesses.quest ? `${recommendations.weaknesses.quest.icon} ${recommendations.weaknesses.quest.name}` : 'nessuna missione'}.`,
     ].join('\n\n');
   }
 
   if (context === 'codex') {
-    const activeTab = CODEX_TAB_DEFS.some(tab => tab.id === state.codexTab) ? state.codexTab : 'system';
-    const tabLabel = CODEX_TAB_DEFS.find(tab => tab.id === activeTab)?.label || 'SYSTEM';
+    const activeTab = activeCodexTab?.id || 'system';
+    const tabLabel = activeCodexTab?.label || 'SYSTEM';
     const practicalLine = {
       system: 'Qui impari come si muove il loop generale: scan, missioni, reward, build ed endgame.',
       stats: 'Qui impari cosa misura ogni stat e quali tipi di quest la fanno salire.',
@@ -6478,29 +7140,54 @@ function buildGuidePageExplanation() {
       legacy: 'Qui leggi l endgame fuori dal daily loop: obiettivi lunghi e identita futura.',
     }[activeTab] || 'Qui il Codex ti spiega le regole del sistema in forma pratica.';
     return [
-      `CODEX non mostra il tuo stato del momento: spiega le regole del sistema. Ora sei su ${tabLabel}.`,
+      `CODEX traduce regole, non priorita giornaliere. Ora sei su ${tabLabel}.`,
       practicalLine,
-      'Usalo quando vuoi capire come funziona una meccanica. Poi torna su Status o Profile per decidere cosa fare davvero.',
+      'La lettura giusta e: capisco la regola qui, poi torno su Status, Quest o Armory per applicarla a una decisione reale.',
+    ].join('\n\n');
+  }
+
+  if (context === 'quests') {
+    const mode = getRecommendedMissionMode(latestAssessment, questFocus);
+    const modeInfo = DIFFICULTY_MODES[mode] || DIFFICULTY_MODES.medium;
+    return [
+      `QUEST BOARD non ti chiede di leggere tutte le missioni: ti chiede di scegliere la missione giusta nella tab ${questTabDef?.label || 'attiva'}.`,
+      questFocus
+        ? `Focus utile ora: ${questFocus.icon} ${questFocus.name}. Mode consigliata: ${modeInfo.icon} ${modeInfo.label}.`
+        : 'Se non vedi una missione chiara, usa il tab come filtro e scegli prima la missione coerente con Today Command o con il tuo punto fragile.',
+      questFocus
+        ? `Apri prima il protocol, poi il why. La domanda giusta qui non e “cosa c e da leggere”, ma “questa missione riduce attrito o converte progresso oggi?”.`
+        : 'Il Guide qui serve a togliere overload: una missione, una mode, una checklist.',
     ].join('\n\n');
   }
 
   if (context === 'gear') {
-    const preview = getItemUnlockPreviewEntries(3);
-    const lead = preview[0] || null;
+    const lead = armoryLead;
     return [
-      'ARMORY serve a leggere reward reali: cosa hai equipaggiato, cosa stai per sbloccare e da dove arriva.',
+      'ARMORY serve a rispondere a una domanda precisa: quale pezzo si muove davvero dopo la tua prossima azione.',
       lead
-        ? `Il blocco Next Unlock Preview mostra il reward piu vicino: ${lead.item.icon} ${lead.item.name} al ${lead.progressPct}%.`
+        ? `Il prossimo item rilevante e ${lead.item.icon} ${lead.item.name}. Stato: ${lead.progressState.statusLabel.toLowerCase()}. Azione richiesta: ${lead.progressState.missingLine}`
         : 'Se non vedi preview vicine, la build non ha ancora aperto abbastanza quest o requisiti per i prossimi item.',
-      'I set spiegano bonus a soglia. I materiali spiegano quanto manca alla forge. Gli slot vuoti non sono vuoti: indicano il prossimo target per quello spazio.',
+      forgeCandidate
+        ? `La forge attuale piu viva e ${forgeCandidate.item.icon} ${getItemDisplayName(forgeCandidate.item)}: ${forgeCandidate.forgeState.hint}`
+        : 'Se la forge non ha priorita attive, il prossimo move reale passa da preview missione, materiali o slot vuoti.',
     ].join('\n\n');
   }
 
   if (context === 'boss') {
+    const directive = todayModel.bossDirective;
     return [
-      'BOSS CHAMBER serve a leggere quali pattern sono pronti per essere affrontati e quali no.',
-      'La schermata del fight ti mostra trigger, segni, fast protocol, sequenza estesa, reward e vittoria reale.',
-      'Usala quando vuoi convertire un ostacolo ricorrente in un protocollo eseguibile, non in semplice lore.',
+      'BOSS CHAMBER non è una galleria nemici: è un sistema decisionale che distingue engage, avoid e prepare.',
+      bossFocus
+        ? `Target dominante: ${bossFocus.icon} ${bossFocus.name}. Verdetto attuale: ${directive.windowLabel}. ${directive.tacticalReason}`
+        : 'Se non c e un boss centrale, la pagina va letta come preparazione, non come invito a pullare.',
+      bossCampaignEffects.length
+        ? `Questo fight è dentro una campagna: ${bossCampaignEffects.map(effect => formatCampaignEffectLine(effect)).slice(0, 2).join(' · ')}`
+        : bossFocus
+          ? 'Questo fight è ancora base state: la prossima vittoria importante deve aprire una weakness, un shortcut o una reward cache su un boss futuro.'
+          : 'Senza target attivo, la campagna si legge dal prossimo ramo ancora da aprire.',
+      activeBoss
+        ? 'Durante il fight il Guide deve ridurre il boss a step, trigger e prova concreta di vittoria. Fuori dal fight, deve dirti se il pull ha senso oggi.'
+        : 'Usa questa pagina per capire se aprire il fight adesso o se serve prima una missione di preparazione.',
     ].join('\n\n');
   }
 
